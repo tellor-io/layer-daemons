@@ -15,9 +15,9 @@ import (
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/ethclient"
-	tokenbridgetypes "github.com/tellor-io/layer-daemons/server/types/token_bridge"
-	tokenbridgetipstypes "github.com/tellor-io/layer-daemons/server/types/token_bridge_tips"
-	tokenbridge "github.com/tellor-io/layer-daemons/token_bridge_feed/abi"
+	tokenbridgetypes "github.com/tellor-io/layer/daemons/server/types/token_bridge"
+	tokenbridgetipstypes "github.com/tellor-io/layer/daemons/server/types/token_bridge_tips"
+	tokenbridge "github.com/tellor-io/layer/daemons/token_bridge_feed/abi"
 
 	"cosmossdk.io/log"
 )
@@ -90,14 +90,20 @@ func newClient(logger log.Logger, tokenDepositsCache *tokenbridgetypes.DepositRe
 func (c *Client) start(ctx context.Context) {
 	if err := c.InitializeDeposits(); err != nil {
 		c.logger.Error("Failed to initialize deposits", "error", err)
+		c.daemonStartup.Done()
 		return
 	}
+	// Mark startup as complete after initialization
+	c.daemonStartup.Done()
+
 	ticker := time.NewTicker(10 * time.Second)
+	c.tickers = append(c.tickers, ticker)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
+			c.logger.Info("TokenBridgeClient: context cancelled, exiting")
 			return
 		case <-ticker.C:
 			// Process regular deposits
@@ -551,4 +557,37 @@ func (c *Client) QueryDepositDetails(depositId *big.Int) (DepositReceipt, error)
 		Tip:         deposit.Tip,
 		BlockHeight: deposit.BlockHeight,
 	}, nil
+}
+
+// Stop stops the token bridge client and all running subtasks
+func (c *Client) Stop() {
+	c.logger.Info("TokenBridgeClient: initiating shutdown")
+	// Wait for startup to complete (if it hasn't already)
+	c.daemonStartup.Wait()
+
+	// Stop all tickers
+	c.logger.Info("TokenBridgeClient: stopping all tickers")
+	for _, ticker := range c.tickers {
+		ticker.Stop()
+	}
+
+	// Close all stop channels
+	c.logger.Info("TokenBridgeClient: closing all stop channels")
+	for _, stop := range c.stops {
+		close(stop)
+	}
+
+	// Close Ethereum clients
+	c.logger.Info("TokenBridgeClient: closing Ethereum clients")
+	if c.primaryEthClient != nil {
+		c.primaryEthClient.Close()
+	}
+	if c.fallbackEthClient != nil {
+		c.fallbackEthClient.Close()
+	}
+
+	// Wait for all subtasks to complete
+	c.logger.Info("TokenBridgeClient: waiting for all subtasks to complete")
+	c.runningSubtasksWaitGroup.Wait()
+	c.logger.Info("TokenBridgeClient: shutdown complete")
 }

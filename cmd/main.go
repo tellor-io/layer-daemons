@@ -1,18 +1,22 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 
+	"github.com/CosmWasm/wasmd/app"
 	"github.com/joho/godotenv"
 	"github.com/rs/zerolog"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 	daemons "github.com/tellor-io/layer-daemons"
-	"github.com/tellor-io/layer-daemons/appconfig"
 	"github.com/tellor-io/layer-daemons/configs"
 	customquery "github.com/tellor-io/layer-daemons/custom_query"
 	daemonflags "github.com/tellor-io/layer-daemons/flags"
+
 	// need this for the address bech32 prefix config
 	_ "github.com/tellor-io/layer/app/config"
 
@@ -71,15 +75,24 @@ var rootCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
-		// Pass prometheusPort to NewApp
-		daemons.NewApp(logger, chainId, grpcAddr, homePath, prometheusPort)
+		// Set up signal handling for graceful shutdown
+		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+		defer stop()
+
+		// Pass prometheusPort and signal context to NewApp
+		appInstance := daemons.NewApp(ctx, logger, chainId, grpcAddr, homePath, prometheusPort)
+
+		// Wait for signal
+		<-ctx.Done()
+		logger.Info("Received shutdown signal, shutting down gracefully...")
+
+		// Gracefully shutdown
+		appInstance.Shutdown()
 	},
 }
 
-var (
-	prometheusPort int
-	testMode       bool
-)
+var prometheusPort int
+var testMode bool
 
 func main() {
 	daemonflags.AddDaemonFlagsToCmd(rootCmd)
@@ -90,7 +103,7 @@ func main() {
 }
 
 func init() {
-	rootCmd.Flags().String(flags.FlagHome, appconfig.DefaultNodeHome, "Node home directory")
+	rootCmd.Flags().String(flags.FlagHome, app.DefaultNodeHome, "Node home directory")
 	rootCmd.Flags().String(flags.FlagFrom, "", "Name of the key to use")
 	rootCmd.Flags().String(flags.FlagGRPC, "0.0.0.0:9090", "Address to listen on")
 	rootCmd.Flags().String(flags.FlagChainID, "layer", "Chain ID")
@@ -121,10 +134,12 @@ func init() {
 	// We'll validate them in the Run function instead
 
 	// Try to load .env from current directory, or parent directory if not found
-	// .env file is optional, so we ignore errors - allows daemon to run without .env
 	if err := godotenv.Load(); err != nil {
 		// Try parent directory (for when running from daemons/ subdirectory)
-		_ = godotenv.Load("../.env")
+		if err := godotenv.Load("../.env"); err != nil {
+			// .env file is optional, so we don't panic if it's not found
+			// This allows the daemon to run without .env if environment variables are set another way
+		}
 	}
 
 	if err := viper.BindPFlags(rootCmd.Flags()); err != nil {

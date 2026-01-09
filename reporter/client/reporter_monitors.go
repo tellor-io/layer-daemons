@@ -14,12 +14,11 @@ import (
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/shirou/gopsutil/v3/process"
 	"github.com/spf13/viper"
-	tokenbridgetipstypes "github.com/tellor-io/layer-daemons/server/types/token_bridge_tips"
+	tokenbridgetipstypes "github.com/tellor-io/layer/daemons/server/types/token_bridge_tips"
 	oracletypes "github.com/tellor-io/layer/x/oracle/types"
 	reportertypes "github.com/tellor-io/layer/x/reporter/types"
 
 	"cosmossdk.io/math"
-
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/cosmos/cosmos-sdk/types/query"
 	stakingtypes "github.com/cosmos/cosmos-sdk/x/staking/types"
@@ -40,6 +39,7 @@ func (c *Client) MonitorCyclelistQuery(ctx context.Context, wg *sync.WaitGroup) 
 	for {
 		select {
 		case <-ctx.Done():
+			c.logger.Info("MonitorCyclelistQuery: context cancelled, exiting")
 			return
 		case <-ticker.C:
 			queryCtx, cancel := context.WithTimeout(ctx, defaultQueryTimeout)
@@ -92,6 +92,7 @@ func (c *Client) MonitorTokenBridgeReports(ctx context.Context, wg *sync.WaitGro
 	for {
 		select {
 		case <-ctx.Done():
+			c.logger.Info("MonitorTokenBridgeReports: context cancelled, exiting")
 			return
 		case <-ticker.C:
 			txCtx, cancel := context.WithTimeout(ctx, defaultTxTimeout)
@@ -126,6 +127,7 @@ func (c *Client) MonitorForTippedQueries(ctx context.Context, wg *sync.WaitGroup
 	for {
 		select {
 		case <-ctx.Done():
+			c.logger.Info("MonitorForTippedQueries: context cancelled, exiting")
 			return
 		case <-ticker.C:
 			queryCtx, cancel := context.WithTimeout(ctx, defaultQueryTimeout)
@@ -197,6 +199,7 @@ func (c *Client) MonitorForTippedQueries(ctx context.Context, wg *sync.WaitGroup
 }
 
 func (c *Client) WithdrawAndStakeEarnedRewardsPeriodically(ctx context.Context, wg *sync.WaitGroup) {
+	defer wg.Done()
 	freqVar := os.Getenv("WITHDRAW_FREQUENCY")
 	if freqVar == "" {
 		freqVar = "43200" // default to being 12 hours or 43200 seconds
@@ -207,21 +210,27 @@ func (c *Client) WithdrawAndStakeEarnedRewardsPeriodically(ctx context.Context, 
 		return
 	}
 
+	ticker := time.NewTicker(time.Duration(frequency) * time.Second)
+	defer ticker.Stop()
+
 	for {
-		valAddr := os.Getenv("REPORTERS_VALIDATOR_ADDRESS")
-		if valAddr == "" {
-			fmt.Println("Returning from Withdraw Monitor due to no validator address env variable was found")
-			time.Sleep(time.Duration(frequency) * time.Second)
-			continue
-		}
+		select {
+		case <-ctx.Done():
+			c.logger.Info("WithdrawAndStakeEarnedRewardsPeriodically: context cancelled, exiting")
+			return
+		case <-ticker.C:
+			valAddr := os.Getenv("REPORTERS_VALIDATOR_ADDRESS")
+			if valAddr == "" {
+				fmt.Println("Returning from Withdraw Monitor due to no validator address env variable was found")
+				continue
+			}
 
-		withdrawMsg := &reportertypes.MsgWithdrawTip{
-			SelectorAddress:  c.accAddr.String(),
-			ValidatorAddress: valAddr,
+			withdrawMsg := &reportertypes.MsgWithdrawTip{
+				SelectorAddress:  c.accAddr.String(),
+				ValidatorAddress: valAddr,
+			}
+			c.txChan <- TxChannelInfo{Msg: withdrawMsg, isBridge: false, NumRetries: 0, QueryMetaId: 0}
 		}
-		c.txChan <- TxChannelInfo{Msg: withdrawMsg, isBridge: false, NumRetries: 0, QueryMetaId: 0}
-
-		time.Sleep(time.Duration(frequency) * time.Second)
 	}
 }
 
@@ -253,6 +262,7 @@ func (c *Client) AutoUnbondStakePeriodically(ctx context.Context, wg *sync.WaitG
 	for {
 		select {
 		case <-ctx.Done():
+			c.logger.Info("AutoUnbondStakePeriodically: context cancelled, exiting")
 			return
 		case <-ticker.C:
 			c.logger.Info("Trying to unbond stake")
@@ -293,9 +303,6 @@ func (c *Client) AutoUnbondStakePeriodically(ctx context.Context, wg *sync.WaitG
 }
 
 func (c *Client) LogProcessStats() {
-	count := runtime.NumGoroutine()
-	c.logger.Info(fmt.Sprintf("Number of Goroutines: %d\n", count))
-
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
 
