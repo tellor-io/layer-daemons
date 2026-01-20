@@ -125,6 +125,7 @@ func init() {
 	rootCmd.Flags().Uint32("auto-unbonding-frequency", 0, "Enable automatic unbonding every N days (0 = disabled, 1 - 21 days = valid")
 	rootCmd.Flags().Uint32("auto-unbonding-amount", 0, "Amount of tokens in loya to unbond each unbonding transaction (0 = disabled)")
 	rootCmd.Flags().String("auto-unbonding-max-stake-percentage", "0.0", "Maximum percentage of stake to unbond each unbonding transaction (0 = disabled, 1.0 = 100%). If unbonding amount exceeds this percentage, we will skip the unbonding transaction until it exceeds this percentage again.")
+	rootCmd.Flags().Int64("minimum-stake-amount-threshold", 1000000, "Minimum stake amount threshold to never go below when auto unbonding is enabled")
 
 	// Marking required flags
 	if err := rootCmd.MarkFlagRequired(flags.FlagHome); err != nil {

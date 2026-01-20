@@ -193,7 +193,11 @@ func (c *Client) Start(
 	autoUnbondingFrequency := viper.GetUint32("auto-unbonding-frequency")
 	autoUnbondingAmount := viper.GetUint32("auto-unbonding-amount")
 	autoUnbondingMaxStakePercentage := viper.GetString("auto-unbonding-max-stake-percentage")
+	minimumStakeAmountThreshold := viper.GetInt64("minimum-stake-amount-threshold")
 
+	if minimumStakeAmountThreshold <= 0 {
+		return fmt.Errorf("minimum-stake-amount-threshold must be greater than 0, got: %d", minimumStakeAmountThreshold)
+	}
 	if autoUnbondingFrequency > 0 {
 		if autoUnbondingAmount == 0 {
 			return fmt.Errorf("auto-unbonding-amount must be greater than 0 when auto-unbonding-frequency is set")
@@ -205,6 +209,7 @@ func (c *Client) Start(
 		if maxStakePercentage.LT(math.LegacyZeroDec()) || maxStakePercentage.GT(math.LegacyNewDecFromInt(math.NewInt(1))) {
 			return fmt.Errorf("auto-unbonding-max-stake-percentage must be between 0.0 and 1.0, got: %s", autoUnbondingMaxStakePercentage)
 		}
+
 	}
 
 	// Log price guard configuration
@@ -223,6 +228,7 @@ func (c *Client) Start(
 			"frequency", autoUnbondingFrequency,
 			"amount", autoUnbondingAmount,
 			"max_stake_percentage", autoUnbondingMaxStakePercentage,
+			"minimum_stake_amount_threshold", minimumStakeAmountThreshold,
 		)
 	} else {
 		c.logger.Info("Auto unbonding disabled")

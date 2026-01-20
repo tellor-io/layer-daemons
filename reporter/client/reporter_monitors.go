@@ -239,7 +239,13 @@ func (c *Client) AutoUnbondStakePeriodically(ctx context.Context, wg *sync.WaitG
 	frequency := viper.GetUint32("auto-unbonding-frequency")
 	amount := viper.GetUint32("auto-unbonding-amount")
 	maxStakePercentageStr := viper.GetString("auto-unbonding-max-stake-percentage")
+	minimumStakeAmountThreshold := viper.GetInt64("minimum-stake-amount-threshold")
+	minimumStakeAmount := math.NewIntFromUint64(uint64(minimumStakeAmountThreshold))
 
+	if minimumStakeAmount.LT(math.ZeroInt()) {
+		c.logger.Error("Minimum stake amount threshold must be greater than 0")
+		return
+	}
 	if frequency == 0 {
 		c.logger.Info("Auto unbonding is disabled")
 		return
@@ -288,6 +294,16 @@ func (c *Client) AutoUnbondStakePeriodically(ctx context.Context, wg *sync.WaitG
 
 			if maxStakeAbleToWithdraw.LT(math.LegacyNewDecFromInt(unbondAmount)) {
 				c.logger.Info("Not enough stake to withdraw", "reporterStake", reporterStake, "maxStakeAbleToWithdraw", maxStakeAbleToWithdraw)
+				continue
+			}
+
+			if reporterStake.LT(math.LegacyNewDecFromInt(minimumStakeAmount)) {
+				c.logger.Info("Reporter stake is below minimum stake amount threshold", "reporterStake", reporterStake)
+				continue
+			}
+			stakeAfterUnbond := reporterStake.Sub(math.LegacyNewDecFromInt(unbondAmount))
+			if stakeAfterUnbond.LT(math.LegacyNewDecFromInt(minimumStakeAmount)) {
+				c.logger.Info("Unbonding would go below minimum stake amount threshold", "reporterStake", reporterStake, "stakeAfterUnbond", stakeAfterUnbond)
 				continue
 			}
 
