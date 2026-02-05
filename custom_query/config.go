@@ -282,6 +282,7 @@ func BuildQueryEndpoints(homeDir, localDir, file string) (map[string]QueryConfig
 					endpoint.EndpointType, query.ID)
 			}
 			url := template.URLTemplate
+			url = os.ExpandEnv(url)
 			// find the placeholders in the URL template
 			placeholderRegex := regexp.MustCompile(`\{([^{}]+)\}`)
 			matches := placeholderRegex.FindAllStringSubmatch(url, -1)

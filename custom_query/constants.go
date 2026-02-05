@@ -147,7 +147,7 @@ var StaticQueriesConfig = map[string]*QueryConfig{
 		ResponseType:      "ufixed256x18",
 		Endpoints: []EndpointConfig{
 			{
-				EndpointType: "coingecko",
+				EndpointType: "coingeckoPro",
 				ResponsePath: []string{"susds", "usd"},
 				Params: map[string]string{
 					"coin_id": "susds",
@@ -190,23 +190,14 @@ var StaticQueriesConfig = map[string]*QueryConfig{
 		ID:                "76b504e33305a63a3b80686c0b7bb99e7697466927ba78e224728e80bfaaa0be",
 		AggregationMethod: "median",
 		MaxSpreadPercent:  100.0,
-		MinResponses:      2,
+		MinResponses:      1,
 		ResponseType:      "ufixed256x18",
 		Endpoints: []EndpointConfig{
 			{
-				EndpointType: "coingecko",
+				EndpointType: "coingeckoPro",
 				ResponsePath: []string{"tbtc", "usd"},
 				Params: map[string]string{
 					"coin_id": "tbtc",
-				},
-				MarketId: "TBTC-USD",
-			},
-			{
-				EndpointType: "coinmarketcap",
-				ResponsePath: []string{"data", "26133", "quote", "USD", "price"},
-				Params: map[string]string{
-					// "symbol": "TBTC",
-					"id": "26133",
 				},
 				MarketId: "TBTC-USD",
 			},

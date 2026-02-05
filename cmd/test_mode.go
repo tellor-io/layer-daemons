@@ -99,91 +99,69 @@ func startPricefeedDaemon(
 	}, nil
 }
 
-// waitForCacheWarmup polls the cache until the required market IDs have valid prices or timeout is reached.
+// waitForCacheWarmup polls the cache until prices are available or timeout is reached.
+// If requiredMarketIDs is nil or empty, it waits for any prices to be loaded (general warm-up).
+// If requiredMarketIDs is provided, it waits for those specific markets to have prices.
 func waitForCacheWarmup(
 	cache *pricefeedservertypes.MarketToExchangePrices,
 	requiredMarketIDs []uint32,
 	timeout time.Duration,
 	logger log.Logger,
 ) error {
-	if len(requiredMarketIDs) == 0 {
-		return nil
-	}
-
-	logger.Info("Waiting for price cache to warm up...", "required_markets", requiredMarketIDs, "timeout", timeout)
-
-	// Build market params for the required IDs
-	var requiredMarketParams []types.MarketParam
-	for _, marketID := range requiredMarketIDs {
-		if param, exists := constants.StaticMarketParamsConfig[marketID]; exists {
-			requiredMarketParams = append(requiredMarketParams, *param)
-		}
-	}
+	logger.Info("Waiting for price cache to warm up...", "timeout", timeout)
 
 	deadline := time.Now().Add(timeout)
 	checkInterval := 500 * time.Millisecond
 
-	for time.Now().Before(deadline) {
-		prices := cache.GetValidMedianPrices(requiredMarketParams, time.Now())
-
-		// Check if all required markets have prices
-		allPresent := true
-		var missingMarkets []uint32
+	// Build market params for checking - use all static market params if none specified
+	var marketParamsToCheck []types.MarketParam
+	if len(requiredMarketIDs) > 0 {
 		for _, marketID := range requiredMarketIDs {
-			if _, exists := prices[marketID]; !exists {
-				allPresent = false
-				missingMarkets = append(missingMarkets, marketID)
+			if param, exists := constants.StaticMarketParamsConfig[marketID]; exists {
+				marketParamsToCheck = append(marketParamsToCheck, *param)
 			}
 		}
+	} else {
+		// Use all static market params for general warm-up check
+		for _, param := range constants.StaticMarketParamsConfig {
+			marketParamsToCheck = append(marketParamsToCheck, *param)
+		}
+	}
 
-		if allPresent {
-			logger.Info("Price cache warmed up successfully", "markets_loaded", len(prices))
-			return nil
+	minPricesToProceed := 1 // At least 1 price loaded before proceeding
+
+	for time.Now().Before(deadline) {
+		prices := cache.GetValidMedianPrices(marketParamsToCheck, time.Now())
+
+		if len(requiredMarketIDs) > 0 {
+			// Check if all required markets have prices
+			allPresent := true
+			var missingMarkets []uint32
+			for _, marketID := range requiredMarketIDs {
+				if _, exists := prices[marketID]; !exists {
+					allPresent = false
+					missingMarkets = append(missingMarkets, marketID)
+				}
+			}
+
+			if allPresent {
+				logger.Info("Price cache warmed up successfully", "markets_loaded", len(prices))
+				return nil
+			}
+			logger.Debug("Cache warm-up in progress", "loaded", len(prices), "missing", missingMarkets)
+		} else {
+			// General warm-up - just wait for some prices to load
+			if len(prices) >= minPricesToProceed {
+				logger.Info("Price cache warmed up successfully", "markets_loaded", len(prices))
+				return nil
+			}
+			logger.Debug("Cache warm-up in progress", "loaded", len(prices))
 		}
 
-		logger.Debug("Cache warm-up in progress", "loaded", len(prices), "missing", missingMarkets)
 		time.Sleep(checkInterval)
 	}
 
 	return fmt.Errorf("timeout waiting for price cache to warm up")
-}
-
-// hasCustomQueriesWithUsdVia checks if any custom queries require USD via prices from the cache.
-func hasCustomQueriesWithUsdVia(customQueries map[string]customquery.QueryConfig, queryIdFilter string) bool {
-	for queryID, queryConfig := range customQueries {
-		// If a filter is provided, only check the matching query
-		if queryIdFilter != "" && !strings.EqualFold(queryID, queryIdFilter) {
-			continue
-		}
-		for _, rpcHandler := range queryConfig.RpcReaders {
-			if rpcHandler.UsdViaID != 0 {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// getRequiredMarketIDs extracts all unique UsdViaID values from custom queries.
-func getRequiredMarketIDs(customQueries map[string]customquery.QueryConfig, queryIdFilter string) []uint32 {
-	marketIDSet := make(map[uint32]bool)
-	for queryID, queryConfig := range customQueries {
-		// If a filter is provided, only check the matching query
-		if queryIdFilter != "" && !strings.EqualFold(queryID, queryIdFilter) {
-			continue
-		}
-		for _, rpcHandler := range queryConfig.RpcReaders {
-			if rpcHandler.UsdViaID != 0 {
-				marketIDSet[rpcHandler.UsdViaID] = true
-			}
-		}
-	}
-
-	var marketIDs []uint32
-	for id := range marketIDSet {
-		marketIDs = append(marketIDs, id)
-	}
-	return marketIDs
 }
 
 // runTestMode loads all price feed configurations and tests them
@@ -249,31 +227,24 @@ func runTestMode(homePath string, logger log.Logger, queryId string) error {
 			logger.Info("Testing custom queries...")
 		}
 
-		// Check if any custom queries need USD via prices from the cache
+		// Always start pricefeed daemon for custom queries to ensure all price dependencies are available
+		// (contract handlers have hardcoded dependencies like USDC/USD, ETH/USD, stETH/USD, etc.)
+		logger.Info("Starting pricefeed daemon to populate price cache...")
 		var priceCache *pricefeedservertypes.MarketToExchangePrices
-		var daemonCleanup func()
 
-		if hasCustomQueriesWithUsdVia(customQueries, queryIdFilter) {
-			logger.Info("Custom queries require USD via prices, starting pricefeed daemon...")
-			daemonResult, err := startPricefeedDaemon(homePath, logger, marketParams, exchangeConfigs)
-			if err != nil {
-				logger.Error("Failed to start pricefeed daemon", "error", err)
-				// Fall back to empty cache
-				priceCache = pricefeedservertypes.NewMarketToExchangePrices(5 * time.Minute)
-			} else {
-				priceCache = daemonResult.cache
-				daemonCleanup = daemonResult.cleanup
-				defer daemonCleanup()
-
-				// Wait for cache to warm up with required market prices
-				requiredMarketIDs := getRequiredMarketIDs(customQueries, queryIdFilter)
-				if err := waitForCacheWarmup(priceCache, requiredMarketIDs, 15*time.Second, logger); err != nil {
-					logger.Warn("Cache warm-up incomplete, some tests may fail", "error", err)
-				}
-			}
-		} else {
-			// No USD via prices needed, use empty cache
+		daemonResult, err := startPricefeedDaemon(homePath, logger, marketParams, exchangeConfigs)
+		if err != nil {
+			logger.Error("Failed to start pricefeed daemon", "error", err)
+			// Fall back to empty cache
 			priceCache = pricefeedservertypes.NewMarketToExchangePrices(5 * time.Minute)
+		} else {
+			priceCache = daemonResult.cache
+			defer daemonResult.cleanup()
+
+			// Wait for cache to warm up with prices
+			if err := waitForCacheWarmup(priceCache, nil, 15*time.Second, logger); err != nil {
+				logger.Warn("Cache warm-up incomplete, some tests may fail", "error", err)
+			}
 		}
 
 		for customQueryId, queryConfig := range customQueries {
