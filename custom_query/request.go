@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"cosmossdk.io/log"
 	gometrics "github.com/hashicorp/go-metrics"
 	"github.com/tellor-io/layer-daemons/custom_query/combined/combined_handler"
 	"github.com/tellor-io/layer-daemons/custom_query/contracts/contract_handlers"
@@ -17,6 +18,16 @@ import (
 
 	"github.com/cosmos/cosmos-sdk/telemetry"
 )
+
+// insufficientResponsesError is returned when not enough successful responses are received
+type insufficientResponsesError struct {
+	got  int
+	need int
+}
+
+func (e *insufficientResponsesError) Error() string {
+	return fmt.Sprintf("insufficient successful responses: got %d, need %d", e.got, e.need)
+}
 
 // Result holds the value returned from an endpoint
 type Result struct {
@@ -37,10 +48,12 @@ type FetchPriceResult struct {
 }
 
 // FetchPrice fetches price data for the given query ID
+// The logger parameter is optional (can be nil) and is used to log per-source results
 func FetchPrice(
 	ctx context.Context,
 	query QueryConfig,
 	priceCache *pricefeedservertypes.MarketToExchangePrices,
+	logger log.Logger,
 ) (*FetchPriceResult, error) {
 	// Create a context with timeout
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -90,22 +103,41 @@ func FetchPrice(
 	var successfulResults []Result
 	for result := range results {
 		allResults = append(allResults, result)
+		// Build a descriptive source name for logging
+		sourceName := result.EndpointID
+		if result.SourceId != "" && result.SourceId != result.EndpointID {
+			sourceName = result.SourceId + ":" + result.EndpointID
+		}
 		if result.Err == nil {
 			successfulResults = append(successfulResults, result)
+			// Log successful result
+			if logger != nil {
+				logger.Info("Source fetch succeeded",
+					"source", sourceName,
+					"market", result.MarketId,
+					"value", result.Value,
+				)
+			}
 			// Emit metrics for successful results
 			emitPriceForTelemetry(result, query)
 			emitSuccessForTelemetry(result, query)
 		} else {
+			// Log failed result
+			if logger != nil {
+				logger.Warn("Source fetch failed",
+					"source", sourceName,
+					"market", result.MarketId,
+					"error", result.Err,
+				)
+			}
 			// Emit error metrics for failed results
 			emitErrorForTelemetry(result, query)
 		}
 	}
 	// Check if we have enough successful responses
 	if len(successfulResults) < query.MinResponses {
-		return nil, fmt.Errorf("insufficient successful responses: got %d, need %d",
-			len(successfulResults), query.MinResponses)
+		return nil, &insufficientResponsesError{got: len(successfulResults), need: query.MinResponses}
 	}
-	fmt.Println("Successful results:", successfulResults)
 	// Aggregate results
 	aggregatedValue, err := aggregateResults(successfulResults, query.AggregationMethod, query.ResponseType, query.MaxSpreadPercent)
 	if err != nil {
@@ -182,7 +214,6 @@ func fetchFromContractEndpoint(
 
 	defer contractReader.Reader.Close()
 
-	fmt.Println("Contract value:", value)
 	return Result{
 		Value:      value,
 		EndpointID: "contract:" + contractReader.Handler,
@@ -221,7 +252,6 @@ func fetchFromRpcEndpoint(
 		}
 	}
 
-	fmt.Println("RPC value:", value, rpchandler.EndpointID)
 	return Result{
 		Value:      value,
 		EndpointID: rpchandler.Handler,
@@ -279,7 +309,6 @@ func fetchFromCombinedEndpoint(
 		defer reader.Close()
 	}
 
-	fmt.Println("Combined value:", value)
 	return Result{
 		Value:      value,
 		EndpointID: "combined:" + combinedReader.Handler,

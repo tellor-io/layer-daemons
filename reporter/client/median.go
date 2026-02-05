@@ -38,7 +38,7 @@ func (c *Client) median(querydata []byte) (encodedValue string, rawPrice float64
 	if !ok {
 		return "", 0, fmt.Errorf("no config found for query data: %s", querydatastr)
 	}
-	results, err := customquery.FetchPrice(context.Background(), queryConfig, c.MarketToExchange)
+	results, err := customquery.FetchPrice(context.Background(), queryConfig, c.MarketToExchange, c.logger)
 	if err != nil {
 		return "", 0, fmt.Errorf("failed to fetch price: %w", err)
 	}

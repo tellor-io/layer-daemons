@@ -74,6 +74,18 @@ A price is valid by default up to 30 seconds; to change this to a different defa
 **Also:** Config files are written to homedir/.layer/config/.
 To change/add exchange details or market pairs edit the files `pricefeed_exchange_config.toml` or `market_params.toml` respectively.
 
+### Reset Configs
+Config files can be reset to defaults using the reset-configs command.
+
+# Show warning and list files that would be overwritten
+reporterd reset-configs
+
+# Force reset without confirmation (destructive)
+reporterd reset-configs --force
+
+# Reset configs in a custom home directory
+reporterd reset-configs --home /path/to/node --force
+
 ### Median Server
 
 Median server was added for a way to query median values that were from an endpoint or cli. See usage [here](../x/oracle/client/cli/query_all_get_median.go).
@@ -131,3 +143,14 @@ The Price Guard is a safety mechanism that prevents the reporter from submitting
 4. **Update on Blocked:**
    - If `true`: A blocked price becomes the new baseline for future checks.
    - If `false`: The old price remains the baseline; future submissions must be within threshold of the *old* price.
+
+### Testing
+
+# Test all feeds
+reporterd test
+
+# Test with custom home directory
+reporterd test --home /path/to/config
+
+# Test specific query
+reporterd test --query-id 83a7f3d...

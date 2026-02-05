@@ -8,6 +8,15 @@ var StaticEndpointTemplateConfig = map[string]*EndpointTemplate{
 		Method:      "GET",
 		Timeout:     5000,
 	},
+	"coingeckoPro": {
+		URLTemplate: "https://pro-api.coingecko.com/api/v3/simple/price?ids={coin_id}&vs_currencies=usd&x_cg_pro_api_key=${CG_PRO_API_KEY}",
+		Method:      "GET",
+		Timeout:     5000,
+		ApiKey:      "${CG_PRO_API_KEY}",
+		Headers: map[string]string{
+			"X-CG-Pro-API-Key": "api_key",
+		},
+	},
 	"coinpaprika": {
 		URLTemplate: "https://api.coinpaprika.com/v1/tickers/{coin_id}?quotes=USD",
 		Method:      "GET",
@@ -125,15 +134,6 @@ var StaticQueriesConfig = map[string]*QueryConfig{
 				ResponsePath: []string{"noble-dollar-usdn", "usd"},
 				Params: map[string]string{
 					"coin_id": "noble-dollar-usdn",
-				},
-				MarketId: "USDN-USD",
-			},
-			{
-				EndpointType: "coinmarketcap",
-				ResponsePath: []string{"data", "36538", "quote", "USD", "price"},
-				Params: map[string]string{
-					// "symbol": "USDN",
-					"id": "36538",
 				},
 				MarketId: "USDN-USD",
 			},
@@ -300,15 +300,6 @@ var StaticQueriesConfig = map[string]*QueryConfig{
 				MarketId: "stATOM-USD",
 			},
 			{
-				EndpointType: "coinmarketcap",
-				ResponsePath: []string{"data", "21686", "quote", "USD", "price"},
-				Params: map[string]string{
-					"id": "21686",
-					// "symbol": "stATOM",
-				},
-				MarketId: "stATOM-USD",
-			},
-			{
 				EndpointType: "osmosis",
 				Handler:      "osmosis_pool_price_handler",
 				ResponsePath: []string{"pool"},
@@ -356,6 +347,7 @@ var StaticQueriesConfig = map[string]*QueryConfig{
 					"ethereum":    "contract:ethereum",
 					"coinpaprika": "rpc:coinpaprika",
 					"coingecko":   "rpc:coingecko",
+					"uniswapV3ethereum": "rpc:uniswapV3ethereum",
 				},
 				CombinedConfig: map[string]any{
 					"min_responses":             1,
@@ -368,6 +360,10 @@ var StaticQueriesConfig = map[string]*QueryConfig{
 					"coinpaprika_params": map[string]string{
 						"coin_id": "usn1-noon-usn",
 					},
+					"uniswapV3ethereum_params": map[string]string{
+						"token_address": "0xda67b4284609d2d48e5d10cfac411572727dc1ed",
+					},
+					"uniswapV3ethereum_response_path": []string{"data", "token", "derivedETH"},
 				},
 			},
 		},

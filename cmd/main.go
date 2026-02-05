@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/joho/godotenv"
 	"github.com/rs/zerolog"
@@ -39,15 +40,6 @@ var rootCmd = &cobra.Command{
 		}
 		logger := log.NewLogger(os.Stderr, log.LevelOption(loglevel))
 
-		// Check if test mode is enabled
-		if testMode {
-			if err := runTestMode(homePath, logger); err != nil {
-				fmt.Printf("Test mode failed: %v\n", err)
-				os.Exit(1)
-			}
-			os.Exit(0)
-		}
-
 		// Normal daemon mode - validate required flags
 		chainId := viper.GetString(flags.FlagChainID)
 		grpcAddr := viper.GetString(flags.FlagGRPC)
@@ -78,8 +70,123 @@ var rootCmd = &cobra.Command{
 
 var (
 	prometheusPort int
-	testMode       bool
+	testQueryId    string
 )
+
+// testCmd represents the test subcommand for testing data feed sources
+var testCmd = &cobra.Command{
+	Use:   "test",
+	Short: "Test data feed sources",
+	Long:  "Test mode: verify price feed configurations and calculate medians without starting daemon",
+	Run: func(cmd *cobra.Command, args []string) {
+		homePath, _ := cmd.Flags().GetString(flags.FlagHome)
+		logLevelstr, _ := cmd.Flags().GetString(flags.FlagLogLevel)
+
+		// Validate configs exist before proceeding
+		if err := validateConfigsExist(homePath); err != nil {
+			fmt.Printf("Error: %v\n", err)
+			os.Exit(1)
+		}
+
+		loglevel, err := zerolog.ParseLevel(logLevelstr)
+		if err != nil {
+			fmt.Printf("Error parsing log level: %v\n", err)
+			os.Exit(1)
+		}
+		logger := log.NewLogger(os.Stderr, log.LevelOption(loglevel))
+
+		if err := runTestMode(homePath, logger, testQueryId); err != nil {
+			fmt.Printf("Test mode failed: %v\n", err)
+			os.Exit(1)
+		}
+	},
+}
+
+// validateConfigsExist checks that required config files exist at the given home path
+func validateConfigsExist(homePath string) error {
+	configDir := filepath.Join(homePath, "config")
+	requiredFiles := []string{
+		"market_params.toml",
+		"pricefeed_exchange_config.toml",
+	}
+	for _, file := range requiredFiles {
+		if _, err := os.Stat(filepath.Join(configDir, file)); os.IsNotExist(err) {
+			return fmt.Errorf("no configs found at %s. Use --home flag to specify config directory", homePath)
+		}
+	}
+	return nil
+}
+
+var forceReset bool
+
+// resetConfigsCmd represents the reset-configs subcommand
+var resetConfigsCmd = &cobra.Command{
+	Use:   "reset-configs",
+	Short: "Reset config files to defaults",
+	Long:  "Overwrites existing config files with default values generated from the daemon binary. This is destructive and will lose any custom configuration.",
+	Run: func(cmd *cobra.Command, args []string) {
+		homePath, _ := cmd.Flags().GetString(flags.FlagHome)
+		configDir := filepath.Join(homePath, "config")
+
+		// Check if configs exist and warn user
+		configFiles := []string{
+			"market_params.toml",
+			"pricefeed_exchange_config.toml",
+			"custom_query_config.toml",
+		}
+
+		existingFiles := []string{}
+		for _, file := range configFiles {
+			if _, err := os.Stat(filepath.Join(configDir, file)); err == nil {
+				existingFiles = append(existingFiles, file)
+			}
+		}
+
+		if len(existingFiles) > 0 && !forceReset {
+			fmt.Printf("Warning: The following config files will be overwritten:\n")
+			for _, file := range existingFiles {
+				fmt.Printf("  - %s\n", filepath.Join(configDir, file))
+			}
+			fmt.Printf("\nUse --force to proceed with reset.\n")
+			os.Exit(1)
+		}
+
+		// Ensure config directory exists
+		if err := os.MkdirAll(configDir, 0o755); err != nil {
+			fmt.Printf("Error creating config directory: %v\n", err)
+			os.Exit(1)
+		}
+
+		// Reset market_params.toml
+		marketParamsPath := filepath.Join(configDir, "market_params.toml")
+		marketParamsBuffer := configs.GenerateDefaultMarketParamsTomlString()
+		if err := os.WriteFile(marketParamsPath, marketParamsBuffer.Bytes(), 0o644); err != nil {
+			fmt.Printf("Error writing %s: %v\n", marketParamsPath, err)
+			os.Exit(1)
+		}
+		fmt.Printf("Reset %s\n", marketParamsPath)
+
+		// Reset pricefeed_exchange_config.toml
+		exchangeConfigPath := filepath.Join(configDir, "pricefeed_exchange_config.toml")
+		exchangeConfigBuffer := configs.GenerateDefaultExchangeTomlString()
+		if err := os.WriteFile(exchangeConfigPath, exchangeConfigBuffer.Bytes(), 0o644); err != nil {
+			fmt.Printf("Error writing %s: %v\n", exchangeConfigPath, err)
+			os.Exit(1)
+		}
+		fmt.Printf("Reset %s\n", exchangeConfigPath)
+
+		// Reset custom_query_config.toml
+		customQueryPath := filepath.Join(configDir, "custom_query_config.toml")
+		customQueryBuffer := customquery.GenerateDefaultConfigTomlString()
+		if err := os.WriteFile(customQueryPath, customQueryBuffer.Bytes(), 0o644); err != nil {
+			fmt.Printf("Error writing %s: %v\n", customQueryPath, err)
+			os.Exit(1)
+		}
+		fmt.Printf("Reset %s\n", customQueryPath)
+
+		fmt.Printf("\nAll config files have been reset to defaults.\n")
+	},
+}
 
 func main() {
 	daemonflags.AddDaemonFlagsToCmd(rootCmd)
@@ -90,6 +197,20 @@ func main() {
 }
 
 func init() {
+	// Add subcommands
+	rootCmd.AddCommand(testCmd)
+	rootCmd.AddCommand(resetConfigsCmd)
+
+	// Test command flags
+	testCmd.Flags().String(flags.FlagHome, appconfig.DefaultNodeHome, "Node home directory")
+	testCmd.Flags().String(flags.FlagLogLevel, zerolog.InfoLevel.String(), "The logging level (trace|debug|info|warn|error|fatal|panic|disabled)")
+	testCmd.Flags().StringVar(&testQueryId, "query-id", "", "Isolate test to a specific query ID (hex string)")
+
+	// Reset-configs command flags
+	resetConfigsCmd.Flags().String(flags.FlagHome, appconfig.DefaultNodeHome, "Node home directory")
+	resetConfigsCmd.Flags().BoolVar(&forceReset, "force", false, "Force reset without confirmation")
+
+	// Root command flags
 	rootCmd.Flags().String(flags.FlagHome, appconfig.DefaultNodeHome, "Node home directory")
 	rootCmd.Flags().String(flags.FlagFrom, "", "Name of the key to use")
 	rootCmd.Flags().String(flags.FlagGRPC, "0.0.0.0:9090", "Address to listen on")
@@ -106,19 +227,13 @@ func init() {
 	rootCmd.Flags().Duration("price-guard-max-age", 0, "Maximum age of stored price before treating as expired (e.g. 1m, 1h)")
 	rootCmd.Flags().Bool("price-guard-update-on-blocked", false, "Update last known price even if submission is blocked (default false)")
 
-	// Test mode flag
-	rootCmd.Flags().BoolVar(&testMode, "test", false, "Test mode: verify price feed configurations and calculate medians without starting daemon")
 	// Automatic Unbonding flags
 	rootCmd.Flags().Uint32("auto-unbonding-frequency", 0, "Enable automatic unbonding every N days (0 = disabled, 1 - 21 days = valid")
 	rootCmd.Flags().Uint32("auto-unbonding-amount", 0, "Amount of tokens in loya to unbond each unbonding transaction (0 = disabled)")
 	rootCmd.Flags().String("auto-unbonding-max-stake-percentage", "0.0", "Maximum percentage of stake to unbond each unbonding transaction (0 = disabled, 1.0 = 100%). If unbonding amount exceeds this percentage, we will skip the unbonding transaction until it exceeds this percentage again.")
 
-	// Marking required flags
-	if err := rootCmd.MarkFlagRequired(flags.FlagHome); err != nil {
-		panic(err)
-	}
-	// Note: --from, --grpc, --chain-id, and --node are only required in normal mode, not test mode
-	// We'll validate them in the Run function instead
+	// Note: --from, --grpc, --chain-id, and --node are only required in normal mode
+	// We validate them in the Run function instead of marking as required
 
 	// Try to load .env from current directory, or parent directory if not found
 	// .env file is optional, so we ignore errors - allows daemon to run without .env
