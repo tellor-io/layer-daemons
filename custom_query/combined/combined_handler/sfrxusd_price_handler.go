@@ -38,9 +38,17 @@ func (h *SFRXUSDPriceHandler) FetchValue(
 	fetcher := NewParallelFetcher()
 
 	// get sFrx contract data
+	// sourceID is the key from contractReaders map (e.g., "ethereum")
+	sourceID := "ethereum" // Default to "ethereum" if not found
+	for key := range contractReaders {
+		sourceID = key
+		break // Use first source ID
+	}
+
 	fetcher.FetchContract(
 		ctx,
 		"total_assets",
+		sourceID,
 		contractReader,
 		contract_handlers.SFRXUSD_CONTRACT,
 		"totalAssets() returns (uint256)",
@@ -50,6 +58,7 @@ func (h *SFRXUSDPriceHandler) FetchValue(
 	fetcher.FetchContract(
 		ctx,
 		"total_supply",
+		sourceID,
 		contractReader,
 		contract_handlers.SFRXUSD_CONTRACT,
 		"totalSupply() returns (uint256)",

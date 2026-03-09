@@ -74,7 +74,9 @@ func FetchPrice(
 		wg.Add(1)
 		go func(ep CombinedHandler) {
 			defer wg.Done()
-			result := fetchFromCombinedEndpoint(ctx, ep, priceCache)
+			// Add queryID to context for batching support
+			ctxWithQueryID := combined_handler.WithQueryID(ctx, query.ID)
+			result := fetchFromCombinedEndpoint(ctxWithQueryID, ep, priceCache)
 			results <- result
 		}(combinedHandler)
 	}

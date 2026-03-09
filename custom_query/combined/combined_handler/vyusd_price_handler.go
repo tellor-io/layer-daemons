@@ -40,9 +40,17 @@ func (h *VYUSDPriceHandler) FetchValue(
 
 	fetcher := NewParallelFetcher()
 
+	// sourceID is the key from contractReaders map (e.g., "ethereum")
+	sourceID := "ethereum" // Default to "ethereum" if not found
+	for key := range contractReaders {
+		sourceID = key
+		break // Use first source ID
+	}
+
 	fetcher.FetchContract(
 		ctx,
 		"conversion_rate",
+		sourceID,
 		contractReader,
 		VYUSD_CONTRACT,
 		"exchangeRateScaled() returns (uint256)",

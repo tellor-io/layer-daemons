@@ -18,6 +18,7 @@ import (
 	tokenbridgetypes "github.com/tellor-io/layer-daemons/server/types/token_bridge"
 	tokenbridgetipstypes "github.com/tellor-io/layer-daemons/server/types/token_bridge_tips"
 	daemontypes "github.com/tellor-io/layer-daemons/types"
+	"github.com/tellor-io/layer-daemons/unified_config/orchestrator"
 	oracletypes "github.com/tellor-io/layer/x/oracle/types"
 	reportertypes "github.com/tellor-io/layer/x/reporter/types"
 
@@ -67,6 +68,7 @@ type Client struct {
 	TokenDepositsCache   *tokenbridgetypes.DepositReports
 	TokenBridgeTipsCache *tokenbridgetipstypes.DepositTips
 	Custom_query         map[string]customquery.QueryConfig
+	QueryOrchestrator    *orchestrator.QueryOrchestrator // Optional: unified config orchestrator
 
 	accAddr   sdk.AccAddress
 	minGasFee string
@@ -108,6 +110,7 @@ func (c *Client) Start(
 	tokenBridgeTipsCache *tokenbridgetipstypes.DepositTips,
 	custom_queries map[string]customquery.QueryConfig,
 	chainId string,
+	queryOrchestrator *orchestrator.QueryOrchestrator, // Optional: unified config orchestrator
 ) error {
 	// Log the daemon flags.
 	c.logger.Info(
@@ -120,6 +123,10 @@ func (c *Client) Start(
 	c.TokenDepositsCache = tokenDepositsCache
 	c.TokenBridgeTipsCache = tokenBridgeTipsCache
 	c.Custom_query = custom_queries
+	c.QueryOrchestrator = queryOrchestrator
+	if queryOrchestrator != nil {
+		c.logger.Info("Reporter client configured with unified config orchestrator")
+	}
 	// Make a connection to the Cosmos gRPC query services.
 	c.logger.Info("Establishing gRPC connection", "address", grpcAddress)
 	conn, err := grpcClient.NewTcpConnection(ctx, grpcAddress)

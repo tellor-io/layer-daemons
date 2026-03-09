@@ -3,6 +3,7 @@ package daemons
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"runtime/debug"
 	"time"
 
@@ -22,6 +23,10 @@ import (
 	tokenbridgetipstypes "github.com/tellor-io/layer-daemons/server/types/token_bridge_tips"
 	tokenbridgeclient "github.com/tellor-io/layer-daemons/token_bridge_feed/client"
 	daemontypes "github.com/tellor-io/layer-daemons/types"
+	unified_config "github.com/tellor-io/layer-daemons/unified_config"
+	"github.com/tellor-io/layer-daemons/unified_config/batch"
+	"github.com/tellor-io/layer-daemons/unified_config/cache"
+	"github.com/tellor-io/layer-daemons/unified_config/orchestrator"
 	"google.golang.org/grpc"
 
 	"cosmossdk.io/log"
@@ -35,6 +40,12 @@ type App struct {
 	ReporterClient      *reporterclient.Client
 	DaemonHealthMonitor *daemonservertypes.HealthMonitor
 	TokenBridgeClient   *tokenbridgeclient.Client
+	// Unified config components
+	UnifiedConfig     *unified_config.Config
+	PriceCache        *cache.PriceCache
+	BatchCollector    *batch.BatchCollector
+	BatchScheduler    *batch.BatchScheduler
+	QueryOrchestrator *orchestrator.QueryOrchestrator
 }
 
 // NewAppWithPrometheusPort allows specifying the prometheus port.
@@ -95,6 +106,54 @@ func NewApp(
 	// Start server for handling gRPC messages from daemons.
 	go server.Start()
 
+	// Load unified config (Step 3.7)
+	sourcesPath := filepath.Join(homePath, "config", "sources.toml")
+	assetPairsPath := filepath.Join(homePath, "config", "asset_pairs.toml")
+	unifiedConfig, err := unified_config.LoadConfig(sourcesPath, assetPairsPath)
+	var priceCache *cache.PriceCache
+	var batchCollector *batch.BatchCollector
+	var batchScheduler *batch.BatchScheduler
+	var queryOrchestrator *orchestrator.QueryOrchestrator
+
+	if err != nil {
+		logger.Error("Failed to load unified config, continuing with old config system", "error", err)
+		// Continue with old config system if unified config fails to load
+		// This allows graceful degradation during migration
+		unifiedConfig = nil
+	} else {
+		logger.Info("Unified config loaded successfully", "sources", len(unifiedConfig.Sources), "asset_pairs", len(unifiedConfig.AssetPairs))
+
+		// Initialize unified config components
+		globalStalenessThreshold := time.Duration(unifiedConfig.GlobalStalenessThresholdSeconds) * time.Second
+		sourceTTLs := make(map[string]time.Duration)
+		for id, source := range unifiedConfig.Sources {
+			if source.CacheTTLSeconds > 0 {
+				sourceTTLs[id] = time.Duration(source.CacheTTLSeconds) * time.Second
+			}
+		}
+		priceCache = cache.NewPriceCache(globalStalenessThreshold, sourceTTLs)
+		batchCollector = batch.NewBatchCollector()
+		batchScheduler = batch.NewBatchScheduler(unifiedConfig, batchCollector, priceCache)
+		queryOrchestrator = orchestrator.NewQueryOrchestrator(unifiedConfig, priceCache)
+		queryOrchestrator.WithBatching(batchScheduler, batchCollector)
+
+		// Start batch scheduler
+		if err := batchScheduler.Start(); err != nil {
+			logger.Error("Failed to start batch scheduler", "error", err)
+			// Don't panic - scheduler errors shouldn't prevent app startup
+			// Individual sources can still be queried on-demand
+		} else {
+			logger.Info("Batch scheduler started successfully")
+		}
+
+		// Unified config components are initialized and scheduler is started.
+		// Components (priceCache, batchCollector, batchScheduler, queryOrchestrator)
+		// remain in scope for the lifetime of NewApp and will be passed to
+		// components that need them in step 3.8 (e.g., reporter client).
+		// For now, they are available but not yet integrated with existing clients.
+	}
+
+	// TODO: Remove old config loading once all components are migrated to unified config (Step 3.8)
 	exchangeQueryConfig := configs.ReadExchangeQueryConfigFile(homePath)
 	marketParamsConfig := configs.ReadMarketParamsConfigFile(homePath)
 	// Start pricefeed client for sending prices for the pricefeed server to consume. These prices
@@ -129,6 +188,7 @@ func NewApp(
 			tokenBridgeTipsCache,
 			queries,
 			chainId,
+			queryOrchestrator, // Step 3.8: Pass unified config orchestrator to reporter
 		); err != nil {
 			panic(err)
 		}

@@ -16,6 +16,38 @@ import (
 func (c *Client) median(querydata []byte) (encodedValue string, rawPrice float64, err error) {
 	querydatastr := hex.EncodeToString(querydata)
 
+	// Step 3.8: Try unified config orchestrator first if available
+	if c.QueryOrchestrator != nil {
+		price, err := c.QueryOrchestrator.GetPrice(querydatastr)
+		if err == nil {
+			// Successfully got price from orchestrator
+			// Get the asset pair config to retrieve the exponent
+			pairConfig := c.QueryOrchestrator.GetAssetPairConfig(querydatastr)
+			exponent := int32(-8) // Default exponent
+			if pairConfig != nil {
+				exponent = pairConfig.Exponent
+			} else {
+				// Fallback: try to find exponent from market params
+				for _, marketParam := range c.MarketParams {
+					if strings.EqualFold(marketParam.QueryData, querydatastr) {
+						exponent = marketParam.Exponent
+						break
+					}
+				}
+			}
+
+			value, err := prices.EncodePrice(price, exponent)
+			if err != nil {
+				return "", 0, fmt.Errorf("failed to encode price: %w", err)
+			}
+			c.logger.Info("Median Value from orchestrator", "query_data", querydatastr, "price", price)
+			return value, price, nil
+		}
+		// If orchestrator returns error (e.g., not found), fall through to old system
+		// This allows graceful fallback during migration
+	}
+
+	// Fallback to old system: check market params first
 	for _, marketParam := range c.MarketParams {
 		if strings.EqualFold(marketParam.QueryData, querydatastr) {
 			mv := c.MarketToExchange.GetValidMedianPrices([]types.MarketParam{marketParam}, time.Now())
