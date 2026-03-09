@@ -3,6 +3,17 @@ package customquery
 import "github.com/tellor-io/layer-daemons/exchange_common"
 
 var StaticEndpointTemplateConfig = map[string]*EndpointTemplate{
+	"blocksize": {
+		URLTemplate: "https://data.blocksize.capital/marketdata/v1/api",
+		Method:      "POST",
+		Timeout:     5000,
+		Query:       `{"jsonrpc":"2.0","method":"vwap_latest","params":{"ticker":"{ticker}"}}`,
+		ApiKey:      "${BLOCKSIZE_API_KEY}",
+		Headers: map[string]string{
+			"Content-Type": "application/json",
+			"x-api-key":    "api_key",
+		},
+	},
 	"coingecko": {
 		URLTemplate: "https://api.coingecko.com/api/v3/simple/price?ids={coin_id}&vs_currencies=usd",
 		Method:      "GET",
@@ -88,6 +99,14 @@ var StaticQueriesConfig = map[string]*QueryConfig{
 		ResponseType:      "ufixed256x18",
 		Endpoints: []EndpointConfig{
 			{
+				EndpointType: "blocksize",
+				ResponsePath: []string{"result", "vwap", "price"},
+				Params: map[string]string{
+					"ticker": "SDAIUSD",
+				},
+				MarketId: "SDAI-USD",
+			},
+			{
 				EndpointType: "coingecko",
 				ResponsePath: []string{"savings-dai", "usd"},
 				Params: map[string]string{
@@ -147,6 +166,14 @@ var StaticQueriesConfig = map[string]*QueryConfig{
 		ResponseType:      "ufixed256x18",
 		Endpoints: []EndpointConfig{
 			{
+				EndpointType: "blocksize",
+				ResponsePath: []string{"result", "vwap", "price"},
+				Params: map[string]string{
+					"ticker": "SUSDUSD",
+				},
+				MarketId: "SUSDS-USD",
+			},
+			{
 				EndpointType: "coingecko",
 				ResponsePath: []string{"susds", "usd"},
 				Params: map[string]string{
@@ -179,6 +206,14 @@ var StaticQueriesConfig = map[string]*QueryConfig{
 		ResponseType:      "ufixed256x18",
 		Endpoints: []EndpointConfig{
 			{
+				EndpointType: "blocksize",
+				ResponsePath: []string{"result", "vwap", "price"},
+				Params: map[string]string{
+					"ticker": "SUSDEUSD",
+				},
+				MarketId: "SUSDE-USD",
+			},
+			{
 				EndpointType: "contract",
 				Handler:      "susdeusd_handler",
 				Chain:        "ethereum",
@@ -193,6 +228,14 @@ var StaticQueriesConfig = map[string]*QueryConfig{
 		MinResponses:      2,
 		ResponseType:      "ufixed256x18",
 		Endpoints: []EndpointConfig{
+			{
+				EndpointType: "blocksize",
+				ResponsePath: []string{"result", "vwap", "price"},
+				Params: map[string]string{
+					"ticker": "TBTCUSD",
+				},
+				MarketId: "TBTC-USD",
+			},
 			{
 				EndpointType: "coingecko",
 				ResponsePath: []string{"tbtc", "usd"},
@@ -228,6 +271,14 @@ var StaticQueriesConfig = map[string]*QueryConfig{
 		ResponseType:      "ufixed256x18",
 		Endpoints: []EndpointConfig{
 			{
+				EndpointType: "blocksize",
+				ResponsePath: []string{"result", "vwap", "price"},
+				Params: map[string]string{
+					"ticker": "RETHUSD",
+				},
+				MarketId: "RETH-USD",
+			},
+			{
 				EndpointType: "contract",
 				Handler:      "reth_handler",
 				Chain:        "ethereum",
@@ -242,6 +293,14 @@ var StaticQueriesConfig = map[string]*QueryConfig{
 		MinResponses:      1,
 		ResponseType:      "ufixed256x18",
 		Endpoints: []EndpointConfig{
+			{
+				EndpointType: "blocksize",
+				ResponsePath: []string{"result", "vwap", "price"},
+				Params: map[string]string{
+					"ticker": "WSTETHUSD",
+				},
+				MarketId: "WSTETH-USD",
+			},
 			{
 				EndpointType: "contract",
 				Handler:      "wsteth_handler",
@@ -384,6 +443,7 @@ var StaticQueriesConfig = map[string]*QueryConfig{
 				Handler:      "sfrxusd_price",
 				CombinedSources: map[string]string{
 					"ethereum":    "contract:ethereum",
+					"blocksize":   "rpc:blocksize",
 					"coingecko":   "rpc:coingecko",
 					"curve":       "rpc:curve",
 					"coinpaprika": "rpc:coinpaprika",
@@ -391,6 +451,10 @@ var StaticQueriesConfig = map[string]*QueryConfig{
 				CombinedConfig: map[string]any{
 					"min_responses":      2,
 					"max_spread_percent": 50.0,
+					"blocksize_params": map[string]any{
+						"ticker": "SFRXUSDUSD",
+					},
+					"blocksize_response_path": []string{"result", "vwap", "price"},
 					"coingecko_params": map[string]any{
 						"coin_id": "frax",
 					},
