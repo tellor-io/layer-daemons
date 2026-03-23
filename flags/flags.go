@@ -15,6 +15,7 @@ const (
 	FlagMaxDaemonUnhealthySeconds   = "max-daemon-unhealthy-seconds"
 
 	FlagPriceDaemonLoopDelayMs = "price-daemon-loop-delay-ms"
+	FlagBatchableRefreshIntervalMs = "batchable-refresh-interval-ms"
 
 	FlagKeyringBackend = "keyring-backend"
 )
@@ -36,6 +37,8 @@ type PriceFlags struct {
 	Enabled bool
 	// LoopDelayMs configures the update frequency of the price daemon.
 	LoopDelayMs uint32
+	// BatchableRefreshIntervalMs configures custom-query batchable source cache refresh cadence.
+	BatchableRefreshIntervalMs uint32
 }
 
 // DaemonFlags contains the collected configuration flags for all daemons.
@@ -56,8 +59,9 @@ func GetDefaultDaemonFlags() DaemonFlags {
 				MaxDaemonUnhealthySeconds:   5 * 60, // 5 minutes.
 			},
 			Price: PriceFlags{
-				Enabled:     true,
-				LoopDelayMs: 3_000,
+				Enabled:                    true,
+				LoopDelayMs:                3_000,
+				BatchableRefreshIntervalMs: 3_000,
 			},
 		}
 	}
@@ -96,6 +100,11 @@ func AddDaemonFlagsToCmd(
 		df.Price.LoopDelayMs,
 		"Delay in milliseconds between sending price updates to the application.",
 	)
+	cmd.Flags().Uint32(
+		FlagBatchableRefreshIntervalMs,
+		df.Price.BatchableRefreshIntervalMs,
+		"Delay in milliseconds between custom_query batchable endpoint cache refreshes.",
+	)
 }
 
 // GetDaemonFlagValuesFromOptions gets all daemon flag values from the `AppOptions` struct.
@@ -128,6 +137,10 @@ func GetDaemonFlagValuesFromOptions(
 			result.Price.LoopDelayMs = v
 		}
 	}
-
+	if option := appOpts.Get(FlagBatchableRefreshIntervalMs); option != nil {
+		if v, err := cast.ToUint32E(option); err == nil {
+			result.Price.BatchableRefreshIntervalMs = v
+		}
+	}
 	return result
 }

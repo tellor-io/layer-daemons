@@ -21,6 +21,7 @@ func TestAddDaemonFlagsToCmd(t *testing.T) {
 		flags.FlagMaxDaemonUnhealthySeconds,
 
 		flags.FlagPriceDaemonLoopDelayMs,
+		flags.FlagBatchableRefreshIntervalMs,
 	}
 
 	for _, v := range tests {
@@ -39,6 +40,7 @@ func TestGetDaemonFlagValuesFromOptions_Custom(t *testing.T) {
 	optsMap[flags.FlagMaxDaemonUnhealthySeconds] = uint32(1234)
 
 	optsMap[flags.FlagPriceDaemonLoopDelayMs] = uint32(4444)
+	optsMap[flags.FlagBatchableRefreshIntervalMs] = uint32(5555)
 
 	mockOpts := mocks.AppOptions{}
 	mockOpts.On("Get", mock.Anything).
@@ -59,6 +61,7 @@ func TestGetDaemonFlagValuesFromOptions_Custom(t *testing.T) {
 
 	// Price Daemon.
 	require.Equal(t, optsMap[flags.FlagPriceDaemonLoopDelayMs], r.Price.LoopDelayMs)
+	require.Equal(t, optsMap[flags.FlagBatchableRefreshIntervalMs], r.Price.BatchableRefreshIntervalMs)
 }
 
 func TestGetDaemonFlagValuesFromOptions_Default(t *testing.T) {

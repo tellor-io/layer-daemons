@@ -13,7 +13,6 @@ import (
 	customquery "github.com/tellor-io/layer-daemons/custom_query"
 	daemonflags "github.com/tellor-io/layer-daemons/flags"
 	metricsclient "github.com/tellor-io/layer-daemons/metrics/client"
-	pricefeedclient "github.com/tellor-io/layer-daemons/pricefeed/client"
 	reporterclient "github.com/tellor-io/layer-daemons/reporter/client"
 	daemonserver "github.com/tellor-io/layer-daemons/server"
 	daemonservertypes "github.com/tellor-io/layer-daemons/server/types"
@@ -31,7 +30,6 @@ import (
 
 type App struct {
 	Server              *daemonserver.Server
-	PriceFeedClient     *pricefeedclient.Client
 	ReporterClient      *reporterclient.Client
 	DaemonHealthMonitor *daemonservertypes.HealthMonitor
 	TokenBridgeClient   *tokenbridgeclient.Client
@@ -57,12 +55,35 @@ func NewApp(
 	}
 	appOpts := simtestutil.NewAppOptionsWithFlagHome(tempDir())
 	daemonFlags := daemonflags.GetDaemonFlagValuesFromOptions(appOpts)
+	marketParamsConfig := configs.ReadMarketParamsConfigFile(homePath)
+	customquery.SetMarketParamsForQueryResolver(marketParamsConfig)
+
 	queries, err := customquery.BuildQueryEndpoints(homePath, "config", "custom_query_config.toml")
 	if err != nil {
 		panic(err)
 	}
 
+	// Phase 0 fail-fast: ensure every custom_query QueryConfig.ID maps to a chain market param.
+	for queryID := range queries {
+		if _, err := customquery.ResolveMarketIdForQuery(queryID); err != nil {
+			panic(err)
+		}
+	}
+
 	indexPriceCache := pricefeedtypes.NewMarketToExchangePrices(constants.MaxPriceAge)
+
+	if err := customquery.StartBatchableRefresher(
+		context.Background(),
+		logger,
+		homePath,
+		"config",
+		"custom_query_config.toml",
+		queries,
+		indexPriceCache,
+		time.Duration(daemonFlags.Price.BatchableRefreshIntervalMs)*time.Millisecond,
+	); err != nil {
+		panic(err)
+	}
 
 	tokenDepositsCache := tokenbridgetypes.NewDepositReports()
 	tokenBridgeTipsCache := tokenbridgetipstypes.NewDepositTips()
@@ -77,12 +98,6 @@ func NewApp(
 	)
 
 	server.WithPriceFeedMarketToExchangePrices(indexPriceCache)
-	daemonHealthMonitor := daemonservertypes.NewHealthMonitor(
-		daemonservertypes.DaemonStartupGracePeriod,
-		daemonservertypes.HealthCheckPollFrequency,
-		logger,
-		daemonFlags.Shared.PanicOnDaemonFailureEnabled,
-	)
 	server.WithTokenDepositsCache(tokenDepositsCache)
 	// Create a closure for starting pricefeed daemon and daemon server. Daemon services are delayed until after the gRPC
 	// service is started because daemons depend on the gRPC service being available. If a node is initialized
@@ -90,31 +105,10 @@ func NewApp(
 	// daemons will not be able to connect to the cosmos gRPC query service and finish initialization, and the daemon
 	// monitoring service will panic.
 
-	// set flag `--price-daemon-max-unhealthy-seconds=0` to disable
-	maxDaemonUnhealthyDuration := time.Duration(daemonFlags.Shared.MaxDaemonUnhealthySeconds) * time.Second
 	// Start server for handling gRPC messages from daemons.
 	go server.Start()
 
-	exchangeQueryConfig := configs.ReadExchangeQueryConfigFile(homePath)
-	marketParamsConfig := configs.ReadMarketParamsConfigFile(homePath)
-	// Start pricefeed client for sending prices for the pricefeed server to consume. These prices
-	// are retrieved via third-party APIs like Binance and then are encoded in-memory and
-	// periodically sent via gRPC to a shared socket with the server.
-	priceFeedClient := pricefeedclient.StartNewClient(
-		// The client will use `context.Background` so that it can have a different context from
-		// the main application.
-		context.Background(),
-		daemonFlags,
-		grpcAddress,
-		logger,
-		&daemontypes.GrpcClientImpl{},
-		marketParamsConfig,
-		exchangeQueryConfig,
-		constants.StaticExchangeDetails,
-		&pricefeedclient.SubTaskRunnerImpl{},
-	)
-
-	RegisterDaemonWithHealthMonitor(priceFeedClient, daemonHealthMonitor, maxDaemonUnhealthyDuration, logger)
+	logger.Info("Legacy pricefeed daemon startup disabled; using consolidated custom_query pricing path")
 
 	go func() {
 		reporterClient := reporterclient.NewClient(logger, cast.ToString(appOpts.Get("minimum-gas-prices")))

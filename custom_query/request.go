@@ -3,12 +3,14 @@ package customquery
 import (
 	"context"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	gometrics "github.com/hashicorp/go-metrics"
+	"github.com/tellor-io/layer-daemons/constants"
 	"github.com/tellor-io/layer-daemons/custom_query/combined/combined_handler"
 	"github.com/tellor-io/layer-daemons/custom_query/contracts/contract_handlers"
 	rpc_handler "github.com/tellor-io/layer-daemons/custom_query/rpc/rpc_handler"
@@ -196,6 +198,10 @@ func fetchFromRpcEndpoint(
 	rpchandler RpcHandler,
 	priceCache *pricefeedservertypes.MarketToExchangePrices,
 ) Result {
+	if rpchandler.UseCache && rpchandler.Batchable {
+		return fetchFromBatchableCacheEndpoint(rpchandler, priceCache)
+	}
+
 	handlerStr := rpchandler.Handler
 	if handlerStr == "" {
 		handlerStr = "generic"
@@ -225,6 +231,53 @@ func fetchFromRpcEndpoint(
 	return Result{
 		Value:      value,
 		EndpointID: rpchandler.Handler,
+		MarketId:   rpchandler.MarketId,
+		SourceId:   rpchandler.SourceId,
+	}
+}
+
+func fetchFromBatchableCacheEndpoint(
+	rpchandler RpcHandler,
+	priceCache *pricefeedservertypes.MarketToExchangePrices,
+) Result {
+	marketID, err := ResolveMarketIdForQuery(rpchandler.QueryID)
+	if err != nil {
+		return Result{
+			Err:        fmt.Errorf("failed to resolve market id for cache-backed endpoint: %w", err),
+			EndpointID: rpchandler.EndpointID,
+			MarketId:   rpchandler.MarketId,
+			SourceId:   rpchandler.SourceId,
+		}
+	}
+
+	rawPrice, ok := priceCache.GetValidPriceForExchange(marketID, rpchandler.EndpointID, time.Now())
+	if !ok {
+		return Result{
+			Err: fmt.Errorf(
+				"no fresh cached price for market_id=%d exchange_id=%s",
+				marketID,
+				rpchandler.EndpointID,
+			),
+			EndpointID: rpchandler.EndpointID,
+			MarketId:   rpchandler.MarketId,
+			SourceId:   rpchandler.SourceId,
+		}
+	}
+
+	marketParam, exists := constants.StaticMarketParamsConfig[marketID]
+	if !exists {
+		return Result{
+			Err:        fmt.Errorf("market param not found for market id %d", marketID),
+			EndpointID: rpchandler.EndpointID,
+			MarketId:   rpchandler.MarketId,
+			SourceId:   rpchandler.SourceId,
+		}
+	}
+
+	value := float64(rawPrice) * math.Pow10(int(marketParam.Exponent))
+	return Result{
+		Value:      value,
+		EndpointID: rpchandler.EndpointID,
 		MarketId:   rpchandler.MarketId,
 		SourceId:   rpchandler.SourceId,
 	}

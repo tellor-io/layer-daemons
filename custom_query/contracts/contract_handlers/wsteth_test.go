@@ -49,6 +49,7 @@ func TestWSTETHHandler_FetchValue(t *testing.T) {
 		contractResult      string // Hex encoded result
 		stEthPrice          uint64
 		marketParamExponent int32
+		priceUpdateAge     time.Duration
 		expectedValue       float64
 		expectError         bool
 		errorMessage        string
@@ -59,6 +60,7 @@ func TestWSTETHHandler_FetchValue(t *testing.T) {
 			contractResult:      "0x" + hex.EncodeToString(padLeft(big.NewInt(1213540318890078223).Bytes(), 32)), // ~1.2135 stETH per wstETH
 			stEthPrice:          4700000000,                                                                      // $4700 with 6 decimals
 			marketParamExponent: -6,
+			priceUpdateAge:     0,
 			expectedValue:       5703.639497, // 1.2135 * 4700
 			expectError:         false,
 		},
@@ -67,6 +69,7 @@ func TestWSTETHHandler_FetchValue(t *testing.T) {
 			contractResult:      "0x" + hex.EncodeToString(padLeft(big.NewInt(1213540318890078223).Bytes(), 32)),
 			stEthPrice:          470000000000, // $4700 with 8 decimals
 			marketParamExponent: -8,
+			priceUpdateAge:     0,
 			expectedValue:       5703.639497,
 			expectError:         false,
 		},
@@ -74,8 +77,18 @@ func TestWSTETHHandler_FetchValue(t *testing.T) {
 			name:            "no stETH market param",
 			contractResult:  "0x" + hex.EncodeToString(padLeft(big.NewInt(1213540318890078223).Bytes(), 32)),
 			skipMarketParam: true,
+			priceUpdateAge:  0,
 			expectError:     true,
 			errorMessage:    "no valid stETH-USD",
+		},
+		{
+			name:                "stale stETH USD price in cache",
+			contractResult:      "0x" + hex.EncodeToString(padLeft(big.NewInt(1213540318890078223).Bytes(), 32)), // ~1.2135 stETH per wstETH
+			stEthPrice:          4700000000,                                                                      // $4700 with 6 decimals
+			marketParamExponent: -6,
+			priceUpdateAge:     2 * time.Minute, // cache configured to 1 minute in the test
+			expectError:         true,
+			errorMessage:        "no valid stETH-USD price found",
 		},
 	}
 
@@ -110,7 +123,7 @@ func TestWSTETHHandler_FetchValue(t *testing.T) {
 				}()
 
 				// Mock price response
-				now := time.Now()
+				updateTime := time.Now().Add(-tt.priceUpdateAge)
 				priceCache.UpdatePrices([]*pricefeedservertypes.MarketPriceUpdate{
 					{
 						MarketId: exchange_common.STETHUSD_ID,
@@ -118,7 +131,7 @@ func TestWSTETHHandler_FetchValue(t *testing.T) {
 							{
 								ExchangeId:     "test",
 								Price:          tt.stEthPrice,
-								LastUpdateTime: &now,
+								LastUpdateTime: &updateTime,
 							},
 						},
 					},

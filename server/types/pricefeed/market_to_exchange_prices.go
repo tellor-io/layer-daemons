@@ -127,3 +127,31 @@ func (mte *MarketToExchangePrices) GetValidMedianPrices(
 
 	return marketIdToMedianPrice
 }
+
+// GetValidPriceForExchange returns (price, true) iff the stored exchange price
+// for (marketId, exchangeId) is fresh enough to be considered valid at readTime.
+//
+// Freshness semantics match GetValidMedianPrices:
+// a price is valid iff LastUpdateTime is >= (readTime - maxPriceAge).
+func (mte *MarketToExchangePrices) GetValidPriceForExchange(
+	marketId uint32,
+	exchangeId string,
+	readTime time.Time,
+) (price uint64, ok bool) {
+	cutoffTime := readTime.Add(-mte.maxPriceAge)
+
+	mte.Lock()
+	defer mte.Unlock()
+
+	exchangeToPrice, ok := mte.marketToExchangePrices[marketId]
+	if !ok {
+		return 0, false
+	}
+
+	priceTimestamp, ok := exchangeToPrice.exchangeToPriceTimestamp[exchangeId]
+	if !ok || priceTimestamp == nil {
+		return 0, false
+	}
+
+	return priceTimestamp.GetValidPrice(cutoffTime)
+}

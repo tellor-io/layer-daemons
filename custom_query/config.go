@@ -17,6 +17,7 @@ type EndpointTemplate struct {
 	Query       string            `toml:"query"` // for POST requests
 	Method      string            `toml:"method"`
 	Timeout     int               `toml:"timeout"`
+	Batchable   bool              `toml:"batchable"`
 	ApiKey      string            `toml:"api_key"`
 	Headers     map[string]string `toml:"headers"`
 }
@@ -40,8 +41,11 @@ type ContractHandler struct {
 type RpcHandler struct {
 	Handler    string
 	Reader     *rpcreader.Reader
+	QueryID    string
 	Invert     bool
 	UsdViaID   uint32
+	UseCache   bool
+	Batchable  bool
 	Method     string
 	EndpointID string
 	MarketId   string
@@ -72,6 +76,7 @@ type EndpointConfig struct {
 	EndpointType string            `toml:"endpoint_type"`
 	ResponsePath []string          `toml:"response_path"`
 	Params       map[string]string `toml:"params"`
+	UseCache     bool              `toml:"use_cache"`
 
 	// telemtry fields
 	MarketId string `toml:"market_id"`
@@ -89,16 +94,9 @@ type EndpointConfig struct {
 }
 
 func BuildQueryEndpoints(homeDir, localDir, file string) (map[string]QueryConfig, error) {
-	// Read the TOML configuration file
-	tomlFile, err := os.ReadFile(getCustomQueryConfigFilePath(homeDir, localDir, file))
+	config, err := readAndParseConfig(homeDir, localDir, file)
 	if err != nil {
-		return nil, fmt.Errorf("error reading toml file: %w", err)
-	}
-
-	var config Config
-	if err = toml.Unmarshal(tomlFile, &config); err != nil {
-		fmt.Println("Error unmarshalling toml file", err.Error())
-		return nil, fmt.Errorf("error unmarshalling toml file: %w", err)
+		return nil, err
 	}
 
 	// Process RPC endpoints
@@ -281,6 +279,17 @@ func BuildQueryEndpoints(homeDir, localDir, file string) (map[string]QueryConfig
 				return nil, fmt.Errorf("endpoint template not found: %s for query %s",
 					endpoint.EndpointType, query.ID)
 			}
+
+			// Cache policy validation (phase 1)
+			// If use_cache is enabled, the endpoint template must support batch refresh.
+			if endpoint.UseCache && !template.Batchable {
+				return nil, fmt.Errorf(
+					"invalid cache policy for query %s endpoint %s: use_cache=true but endpoint template is not batchable",
+					query.ID,
+					endpoint.EndpointType,
+				)
+			}
+
 			url := template.URLTemplate
 			// find the placeholders in the URL template
 			placeholderRegex := regexp.MustCompile(`\{([^{}]+)\}`)
@@ -334,8 +343,11 @@ func BuildQueryEndpoints(homeDir, localDir, file string) (map[string]QueryConfig
 			rpcReaders = append(rpcReaders, RpcHandler{
 				Handler:    endpoint.Handler,
 				Reader:     rpcReader,
+				QueryID:    query.ID,
 				Invert:     endpoint.Invert,
 				UsdViaID:   endpoint.UsdViaID,
+				UseCache:   endpoint.UseCache,
+				Batchable:  template.Batchable,
 				Method:     template.Method,
 				EndpointID: endpoint.EndpointType,
 				MarketId:   endpoint.MarketId,
@@ -348,6 +360,7 @@ func BuildQueryEndpoints(homeDir, localDir, file string) (map[string]QueryConfig
 			MaxSpreadPercent:  query.MaxSpreadPercent,
 			MinResponses:      query.MinResponses,
 			ResponseType:      query.ResponseType,
+			Endpoints:         query.Endpoints,
 			ContractReaders:   contractReaders,
 			RpcReaders:        rpcReaders,
 			CombinedReaders:   combinedReaders,
@@ -355,6 +368,21 @@ func BuildQueryEndpoints(homeDir, localDir, file string) (map[string]QueryConfig
 	}
 
 	return queryMap, nil
+}
+
+func readAndParseConfig(homeDir, localDir, file string) (Config, error) {
+	tomlFile, err := os.ReadFile(getCustomQueryConfigFilePath(homeDir, localDir, file))
+	if err != nil {
+		return Config{}, fmt.Errorf("error reading toml file: %w", err)
+	}
+
+	var config Config
+	if err = toml.Unmarshal(tomlFile, &config); err != nil {
+		fmt.Println("Error unmarshalling toml file", err.Error())
+		return Config{}, fmt.Errorf("error unmarshalling toml file: %w", err)
+	}
+
+	return config, nil
 }
 
 func processApiKeys(config *Config) {
