@@ -14,8 +14,11 @@ const (
 	FlagPanicOnDaemonFailureEnabled = "panic-on-daemon-failure-enabled"
 	FlagMaxDaemonUnhealthySeconds   = "max-daemon-unhealthy-seconds"
 
-	FlagPriceDaemonLoopDelayMs = "price-daemon-loop-delay-ms"
-	FlagBatchableRefreshIntervalMs = "batchable-refresh-interval-ms"
+	FlagPriceDaemonLoopDelayMs         = "price-daemon-loop-delay-ms"
+	FlagBatchableRefreshIntervalMs     = "batchable-refresh-interval-ms"
+	FlagExchangeCacheRefreshIntervalMs = "exchange-cache-refresh-interval-ms"
+	FlagOracleConfigFile               = "oracle-config-file"
+	FlagOracleConfigDir                = "oracle-config-dir"
 
 	FlagKeyringBackend = "keyring-backend"
 )
@@ -39,6 +42,12 @@ type PriceFlags struct {
 	LoopDelayMs uint32
 	// BatchableRefreshIntervalMs configures custom-query batchable source cache refresh cadence.
 	BatchableRefreshIntervalMs uint32
+	// ExchangeCacheRefreshIntervalMs configures custom-query exchange source cache refresh cadence.
+	ExchangeCacheRefreshIntervalMs uint32
+	// OracleConfigFile is the TOML file name (under OracleConfigDir) with endpoints, queries, and optional [[markets]].
+	OracleConfigFile string
+	// OracleConfigDir is the directory under the node home for the oracle TOML (default "config").
+	OracleConfigDir string
 }
 
 // DaemonFlags contains the collected configuration flags for all daemons.
@@ -59,9 +68,12 @@ func GetDefaultDaemonFlags() DaemonFlags {
 				MaxDaemonUnhealthySeconds:   5 * 60, // 5 minutes.
 			},
 			Price: PriceFlags{
-				Enabled:                    true,
-				LoopDelayMs:                3_000,
-				BatchableRefreshIntervalMs: 3_000,
+				Enabled:                        true,
+				LoopDelayMs:                    3_000,
+				BatchableRefreshIntervalMs:     3_000,
+				ExchangeCacheRefreshIntervalMs: 3_000,
+				OracleConfigFile:               "custom_query_config.toml",
+				OracleConfigDir:                "config",
 			},
 		}
 	}
@@ -105,6 +117,21 @@ func AddDaemonFlagsToCmd(
 		df.Price.BatchableRefreshIntervalMs,
 		"Delay in milliseconds between custom_query batchable endpoint cache refreshes.",
 	)
+	cmd.Flags().Uint32(
+		FlagExchangeCacheRefreshIntervalMs,
+		df.Price.ExchangeCacheRefreshIntervalMs,
+		"Delay in milliseconds between custom_query exchange endpoint cache refreshes.",
+	)
+	cmd.Flags().String(
+		FlagOracleConfigFile,
+		df.Price.OracleConfigFile,
+		"Oracle TOML file name (single file for queries, optional [[markets]], exchange legs).",
+	)
+	cmd.Flags().String(
+		FlagOracleConfigDir,
+		df.Price.OracleConfigDir,
+		"Directory under the node home containing the oracle TOML (default config).",
+	)
 }
 
 // GetDaemonFlagValuesFromOptions gets all daemon flag values from the `AppOptions` struct.
@@ -140,6 +167,21 @@ func GetDaemonFlagValuesFromOptions(
 	if option := appOpts.Get(FlagBatchableRefreshIntervalMs); option != nil {
 		if v, err := cast.ToUint32E(option); err == nil {
 			result.Price.BatchableRefreshIntervalMs = v
+		}
+	}
+	if option := appOpts.Get(FlagExchangeCacheRefreshIntervalMs); option != nil {
+		if v, err := cast.ToUint32E(option); err == nil {
+			result.Price.ExchangeCacheRefreshIntervalMs = v
+		}
+	}
+	if option := appOpts.Get(FlagOracleConfigFile); option != nil {
+		if v, err := cast.ToStringE(option); err == nil && v != "" {
+			result.Price.OracleConfigFile = v
+		}
+	}
+	if option := appOpts.Get(FlagOracleConfigDir); option != nil {
+		if v, err := cast.ToStringE(option); err == nil && v != "" {
+			result.Price.OracleConfigDir = v
 		}
 	}
 	return result

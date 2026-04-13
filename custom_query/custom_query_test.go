@@ -67,7 +67,7 @@ func TestBuildQueryEndpoints(t *testing.T) {
 	defer os.Unsetenv("ETHERSCAN_API_KEY")
 	pwd, _ := os.Getwd()
 
-	queryMap, err := BuildQueryEndpoints(pwd, "testdata", "test_config.toml")
+	queryMap, _, err := BuildQueryEndpoints(pwd, "testdata", "test_config.toml")
 	require.NoError(t, err)
 	require.Equal(t, len(queryMap), 2)
 
@@ -124,7 +124,7 @@ func TestBuildQueryEndpointsErrors(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := BuildQueryEndpoints(pwd, "testdata", tc.configFile)
+			_, _, err := BuildQueryEndpoints(pwd, "testdata", tc.configFile)
 			if tc.expectError {
 				require.Error(t, err)
 			} else {

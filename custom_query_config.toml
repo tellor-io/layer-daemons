@@ -1,0 +1,579 @@
+# Migrated for refactored custom_query config system.
+#
+# Reporter snapshot (legacy layout on disk — use these as reference when reconciling a node):
+# - og_custom_query_config.toml    — same query/endpoint blocks as this file (HTTP templates + contracts).
+# - og_market_params.toml         — chain market list + ExchangeConfigJson per market Id/Pair.
+#   Deploy under the node home as `config/market_params.toml` (or merge with the live file from chain).
+#   The downloaded snapshot may be a subset; custom oracle markets (TBTC-USD, stATOM-USD, …) must
+#   appear in the merged market_params with the same QueryData bytes the chain uses for that feed.
+# - og_pricefeed_exchange_config.toml — exchange poll intervals (reference; consolidated reporter does not
+#   start the legacy pricefeed client).
+#
+# Query id (`queries.<id>` / `id = "..."`): must match reporter routing: keccak256(raw query bytes),
+# i.e. hex(Keccak256(decode_hex(MarketParam.QueryData))) as in `layer/utils.QueryIDFromData`.
+# ResolveMarketIdForQuery accepts either that id or the raw QueryData hex for a market row.
+#
+# Exchange endpoints (`endpoint_type = "exchange"`):
+# - `exchange_id` must appear in that market's ExchangeConfigJson (same names as pricefeed, e.g. CoinbaseRates).
+# - `market_id` is optional (telemetry/labels only; chain market is resolved from query id).
+# - `use_cache` optional (default false); if true, reads MarketToExchangePrices (needs a cache writer).
+# - Do not set REST-only fields: `response_path`, `params`, `handler`, `chain`.
+#
+# Example exchange leg (add under `[[queries.<query_id>.endpoints]]` when the market row lists the exchange):
+#   endpoint_type = "exchange"
+#   exchange_id = "CoinbaseRates"
+#   market_id = "TBTC-USD"
+#   use_cache = false
+# Optional strict ticker check vs canonical JSON:
+#   ticker = "TBTC-USD"
+#
+# Spot markets from `og_market_params.toml` (below): query id = keccak256(hex_decode(QueryData)); use
+# `go run ./scripts/keccak_queryids` to recompute when QueryData changes. Those ids differ from the
+# custom-oracle query hashes earlier in this file, so exchange legs are added as separate queries — not
+# merged into SDAI/TBTC/stATOM/etc. (same query id always resolves one chain `MarketId`). When your live
+# `market_params.toml` includes a row whose keccak id matches an existing custom query, copy the exchange
+# `[[endpoints]]` blocks onto that query to add sources without removing anything.
+
+# This is a TOML config file.
+[endpoints]
+    [endpoints.coinbase]
+    url_template = "https://api.coinbase.com/v2/prices/{currency_pair}/spot"
+    method = "GET"
+    timeout = 5000
+    [endpoints.coingecko]
+    url_template = "https://api.coingecko.com/api/v3/simple/price?ids={coin_id}&vs_currencies=usd"
+    method = "GET"
+    timeout = 5000
+    [endpoints.coingeckoPro]
+    url_template = "https://pro-api.coingecko.com/api/v3/simple/price?ids={coin_id}&vs_currencies=usd&x_cg_pro_api_key=CG-kDqZseceEndaH6gkDNLUayim"
+    method = "GET"
+    timeout = 5000
+    [endpoints.coinmarketcap]
+    url_template = "https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest?id={id}"
+    method = "GET"
+    timeout = 5000
+    api_key = "${CMC_PRO_API_KEY}"
+    headers = { Accept = "application/json", X-CMC_PRO_API_KEY = "api_key" }
+    [endpoints.coinpaprika]
+    url_template = "https://api.coinpaprika.com/v1/tickers/{coin_id}?quotes=USD"
+    method = "GET"
+    timeout = 5000
+    [endpoints.crypto]
+    url_template = "https://api.crypto.com/v2/public/get-ticker?instrument_name={instrument_name}"
+    method = "GET"
+    timeout = 5000
+    [endpoints.curve]
+    url_template = "https://prices.curve.finance/v1/usd_price/ethereum/{contract_address}"
+    method = "GET"
+    timeout = 5000
+    [endpoints.osmosis]
+    url_template = "https://lcd.osmosis.zone/osmosis/gamm/v1beta1/pools/{pool_id}"
+    method = "GET"
+    timeout = 5000
+    [endpoints.sushiswapKatana]
+    url_template = "https://api.sushi.com/price/v1/747474"
+    method = "GET"
+    timeout = 5000
+    [endpoints.uniswapV3ethereum]
+    url_template = "https://gateway.thegraph.com/api/{api_key}/subgraphs/id/5zvR82QoaXYFyDEKLZ9t6v9adgnptxYpKpSbxtgVENFV"
+    method = "POST"
+    timeout = 5000
+    query = '''{"query": "{ token(id: \"{token_address}\") { derivedETH } }"}'''
+    api_key = "${SUBGRAPH_API_KEY}"
+    headers = { Content-Type = "application/json" }
+    [endpoints.uniswapV4ethereum]
+    url_template = "https://gateway.thegraph.com/api/{api_key}/subgraphs/id/DiYPVdygkfjDWhbxGSqAQxwBKmfKnkWQojqeM2rkLb3G"
+    method = "POST"
+    timeout = 5000
+    query = '''{"query": "{ token(id: \"{token_address}\") { derivedETH } }"}'''
+    api_key = "${SUBGRAPH_API_KEY}"
+    headers = { Content-Type = "application/json" }
+[rpc_endpoints]
+    [rpc_endpoints.ethereum]
+    urls = ["https://mainnet.infura.io/v3/${INFURA_API_KEY}", "https://eth-mainnet.alchemyapi.io/v2/${ALCHEMY_API_KEY}", "https://rpc.ankr.com/eth"]
+
+[queries]
+    [queries.03731257e35c49e44b267640126358e5decebdd8f18b5e8f229542ec86e318cf]
+    id = "03731257e35c49e44b267640126358e5decebdd8f18b5e8f229542ec86e318cf"
+    aggregation_method = "median"
+	max_spread_percent = 10.000000
+    min_responses = 1
+    response_type = "ufixed256x18"
+        [[queries.03731257e35c49e44b267640126358e5decebdd8f18b5e8f229542ec86e318cf.endpoints]]
+        endpoint_type = "contract"
+        response_path = []
+        params = {  }
+        market_id = "SUSDE-USD"
+        handler = "susdeusd_handler"
+		chain = "ethereum"
+    [queries.05cddb6b67074aa61fcbe1d2fd5924e028bb699b506267df28c88f7deac4edc6]
+    id = "05cddb6b67074aa61fcbe1d2fd5924e028bb699b506267df28c88f7deac4edc6"
+    aggregation_method = "median"
+	max_spread_percent = 50.000000
+    min_responses = 2
+    response_type = "ufixed256x18"
+        [[queries.05cddb6b67074aa61fcbe1d2fd5924e028bb699b506267df28c88f7deac4edc6.endpoints]]
+        endpoint_type = "coingeckoPro"
+        response_path = ["savings-dai", "usd"]
+        params = { coin_id = "savings-dai" }
+        market_id = "SDAI-USD"
+        [[queries.05cddb6b67074aa61fcbe1d2fd5924e028bb699b506267df28c88f7deac4edc6.endpoints]]
+        endpoint_type = "coinpaprika"
+        response_path = ["quotes", "USD", "price"]
+        params = { coin_id = "sdai-savings-dai" }
+        market_id = "SDAI-USD"
+        [[queries.05cddb6b67074aa61fcbe1d2fd5924e028bb699b506267df28c88f7deac4edc6.endpoints]]
+        endpoint_type = "curve"
+        response_path = ["data", "usd_price"]
+        params = { contract_address = "0x83F20F44975D03b1b09e64809B757c47f942BEeA" }
+        market_id = "SDAI-USD"
+    [queries.0bc2d41117ae8779da7623ee76a109c88b84b9bf4d9b404524df04f7d0ca4ca7]
+    id = "0bc2d41117ae8779da7623ee76a109c88b84b9bf4d9b404524df04f7d0ca4ca7"
+    aggregation_method = "median"
+	max_spread_percent = 100.000000
+    min_responses = 1
+    response_type = "ufixed256x18"
+        [[queries.0bc2d41117ae8779da7623ee76a109c88b84b9bf4d9b404524df04f7d0ca4ca7.endpoints]]
+        endpoint_type = "contract"
+        response_path = []
+        params = {  }
+        market_id = "RETH-USD"
+        handler = "reth_handler"
+		chain = "ethereum"
+    [queries.187f74d310dc494e6efd928107713d4229cd319c2cf300224de02776090809f1]
+    id = "187f74d310dc494e6efd928107713d4229cd319c2cf300224de02776090809f1"
+    aggregation_method = "median"
+	max_spread_percent = 100.000000
+    min_responses = 1
+    response_type = "ufixed256x18"
+        [[queries.187f74d310dc494e6efd928107713d4229cd319c2cf300224de02776090809f1.endpoints]]
+        endpoint_type = "combined"
+        response_path = []
+        params = {  }
+        handler = "susn_price"
+		combined_sources = { ethereum = "contract:ethereum", coinpaprika = "rpc:coinpaprika", coingecko = "rpc:coingecko" }
+		[queries.187f74d310dc494e6efd928107713d4229cd319c2cf300224de02776090809f1.endpoints.combined_config]
+		    coingecko_params = { coin_id = "noon-usn" }
+		    coingecko_response_path = ["noon-usn", "usd"]
+		    coinpaprika_params = { coin_id = "usn1-noon-usn" }
+		    coinpaprika_response_path = ["quotes", "USD", "price"]
+		    max_spread_percent = 100.000000
+		    min_responses = 1
+    [queries.1962cde2f19178fe2bb2229e78a6d386e6406979edc7b9a1966d89d83b3ebf2e]
+    id = "1962cde2f19178fe2bb2229e78a6d386e6406979edc7b9a1966d89d83b3ebf2e"
+    aggregation_method = "median"
+	max_spread_percent = 100.000000
+    min_responses = 1
+    response_type = "ufixed256x18"
+        [[queries.1962cde2f19178fe2bb2229e78a6d386e6406979edc7b9a1966d89d83b3ebf2e.endpoints]]
+        endpoint_type = "contract"
+        response_path = []
+        params = {  }
+        market_id = "WSTETH-USD"
+        handler = "wsteth_handler"
+		chain = "ethereum"
+    [queries.35155b44678db9e9e021c2cf49dd20c31b49e03415325c2beffb5221cf63882d]
+    id = "35155b44678db9e9e021c2cf49dd20c31b49e03415325c2beffb5221cf63882d"
+    aggregation_method = "median"
+	max_spread_percent = 10.000000
+    min_responses = 1
+    response_type = "ufixed256x18"
+        [[queries.35155b44678db9e9e021c2cf49dd20c31b49e03415325c2beffb5221cf63882d.endpoints]]
+        endpoint_type = "contract"
+        response_path = []
+        params = {  }
+        market_id = "YTOKEN-USD"
+        handler = "yieldfi_yusd_handler"
+		chain = "ethereum"
+    [queries.59ae85cec665c779f18255dd4f3d97821e6a122691ee070b9a26888bc2a0e45a]
+    id = "59ae85cec665c779f18255dd4f3d97821e6a122691ee070b9a26888bc2a0e45a"
+    aggregation_method = "median"
+	max_spread_percent = 10.000000
+    min_responses = 1
+    response_type = "ufixed256x18"
+        [[queries.59ae85cec665c779f18255dd4f3d97821e6a122691ee070b9a26888bc2a0e45a.endpoints]]
+        endpoint_type = "coingeckoPro"
+        response_path = ["susds", "usd"]
+        params = { coin_id = "susds" }
+        market_id = "SUSDS-USD"
+    [queries.611fd0e88850bf0cc036d96d04d47605c90b993485c2971e022b5751bbb04f23]
+    id = "611fd0e88850bf0cc036d96d04d47605c90b993485c2971e022b5751bbb04f23"
+    aggregation_method = "median"
+	max_spread_percent = 100.000000
+    min_responses = 2
+    response_type = "ufixed256x18"
+        [[queries.611fd0e88850bf0cc036d96d04d47605c90b993485c2971e022b5751bbb04f23.endpoints]]
+        endpoint_type = "coingeckoPro"
+        response_path = ["stride-staked-atom", "usd"]
+        params = { coin_id = "stride-staked-atom" }
+        market_id = "stATOM-USD"
+        [[queries.611fd0e88850bf0cc036d96d04d47605c90b993485c2971e022b5751bbb04f23.endpoints]]
+        endpoint_type = "coinmarketcap"
+        response_path = ["data", "21686", "quote", "USD", "price"]
+        params = { id = "21686" }
+        market_id = "stATOM-USD"
+        [[queries.611fd0e88850bf0cc036d96d04d47605c90b993485c2971e022b5751bbb04f23.endpoints]]
+        endpoint_type = "osmosis"
+        response_path = ["pool"]
+        params = { pool_id = "1136" }
+        market_id = "stATOM-USD"
+        handler = "osmosis_pool_price_handler"
+		usd_via_id = 7
+    [queries.76b504e33305a63a3b80686c0b7bb99e7697466927ba78e224728e80bfaaa0be]
+    id = "76b504e33305a63a3b80686c0b7bb99e7697466927ba78e224728e80bfaaa0be"
+    aggregation_method = "median"
+	max_spread_percent = 100.000000
+    min_responses = 2
+    response_type = "ufixed256x18"
+        [[queries.76b504e33305a63a3b80686c0b7bb99e7697466927ba78e224728e80bfaaa0be.endpoints]]
+        endpoint_type = "coingeckoPro"
+        response_path = ["tbtc", "usd"]
+        params = { coin_id = "tbtc" }
+        market_id = "TBTC-USD"
+        [[queries.76b504e33305a63a3b80686c0b7bb99e7697466927ba78e224728e80bfaaa0be.endpoints]]
+        endpoint_type = "coinmarketcap"
+        response_path = ["data", "26133", "quote", "USD", "price"]
+        params = { id = "26133" }
+        market_id = "TBTC-USD"
+        [[queries.76b504e33305a63a3b80686c0b7bb99e7697466927ba78e224728e80bfaaa0be.endpoints]]
+        endpoint_type = "coinbase"
+        response_path = ["data", "amount"]
+        params = { currency_pair = "TBTC-USD" }
+        market_id = "TBTC-USD"
+    [queries.91513b15db3cef441d52058b24412957f9cc8645c53aecf39446ac9b0d2dcca4]
+    id = "91513b15db3cef441d52058b24412957f9cc8645c53aecf39446ac9b0d2dcca4"
+    aggregation_method = "median"
+	max_spread_percent = 10.000000
+    min_responses = 1
+    response_type = "ufixed256x18"
+        [[queries.91513b15db3cef441d52058b24412957f9cc8645c53aecf39446ac9b0d2dcca4.endpoints]]
+        endpoint_type = "combined"
+        response_path = []
+        params = {  }
+        market_id = "VYUSD-USD"
+        handler = "vyusd_price"
+		combined_sources = { ethereum = "contract:ethereum" }
+		[queries.91513b15db3cef441d52058b24412957f9cc8645c53aecf39446ac9b0d2dcca4.endpoints.combined_config]
+		    max_spread_percent = 100.000000
+		    min_responses = 1
+    [queries.9874c1c7b7e76b78afdfdda6dcecef56edf6bf3d49d6d6ef2a98404ea2e04a59]
+    id = "9874c1c7b7e76b78afdfdda6dcecef56edf6bf3d49d6d6ef2a98404ea2e04a59"
+    aggregation_method = "median"
+	max_spread_percent = 10.000000
+    min_responses = 1
+    response_type = "ufixed256x18"
+        [[queries.9874c1c7b7e76b78afdfdda6dcecef56edf6bf3d49d6d6ef2a98404ea2e04a59.endpoints]]
+        endpoint_type = "contract"
+        response_path = []
+        params = {  }
+        market_id = "YIELDFI-YETH-USD"
+        handler = "yieldfi_yeth_handler"
+		chain = "ethereum"
+    [queries.ab30caa3e7827a27c153063bce02c0b260b29c0c164040c003f0f9ec66002510]
+    id = "ab30caa3e7827a27c153063bce02c0b260b29c0c164040c003f0f9ec66002510"
+    aggregation_method = "median"
+	max_spread_percent = 10.000000
+    min_responses = 1
+    response_type = "ufixed256x18"
+        [[queries.ab30caa3e7827a27c153063bce02c0b260b29c0c164040c003f0f9ec66002510.endpoints]]
+        endpoint_type = "combined"
+        response_path = []
+        params = {  }
+        market_id = "SFRXUSD-USD"
+        handler = "sfrxusd_price"
+		combined_sources = { ethereum = "contract:ethereum", coingecko = "rpc:coingecko", curve = "rpc:curve", coinpaprika = "rpc:coinpaprika" }
+		[queries.ab30caa3e7827a27c153063bce02c0b260b29c0c164040c003f0f9ec66002510.endpoints.combined_config]
+		    coingecko_params = { coin_id = "frax" }
+		    coingecko_response_path = ["frax", "usd"]
+		    coinpaprika_params = { coin_id = "frax-frax" }
+		    coinpaprika_response_path = ["quotes", "USD", "price"]
+		    curve_params = { contract_address = "0x853d955aCEf822Db058eb8505911ED77F175b99e" }
+		    curve_response_path = ["data", "usd_price"]
+		    max_spread_percent = 50.000000
+		    min_responses = 2
+    [queries.d62f132d9d04dde6e223d4366c48b47cd9f90228acdc6fa755dab93266db5176]
+    id = "d62f132d9d04dde6e223d4366c48b47cd9f90228acdc6fa755dab93266db5176"
+    aggregation_method = "median"
+	max_spread_percent = 100.000000
+    min_responses = 2
+    response_type = "ufixed256x18"
+        [[queries.d62f132d9d04dde6e223d4366c48b47cd9f90228acdc6fa755dab93266db5176.endpoints]]
+        endpoint_type = "coingeckoPro"
+        response_path = ["lrt-squared", "usd"]
+        params = { coin_id = "lrt-squared" }
+        market_id = "KING-USD"
+        [[queries.d62f132d9d04dde6e223d4366c48b47cd9f90228acdc6fa755dab93266db5176.endpoints]]
+        endpoint_type = "coinmarketcap"
+        response_path = ["data", "33695", "quote", "USD", "price"]
+        params = { id = "33695" }
+        market_id = "KING-USD"
+        [[queries.d62f132d9d04dde6e223d4366c48b47cd9f90228acdc6fa755dab93266db5176.endpoints]]
+        endpoint_type = "uniswapV4ethereum"
+        response_path = ["data", "token", "derivedETH"]
+        params = { token_address = "0x8f08b70456eb22f6109f57b8fafe862ed28e6040" }
+        market_id = "KING-USD"
+		usd_via_id = 1
+    [queries.e010d752f28dcd2804004d0b57ab1bdc4eca092895d49160204120af11d15f3e]
+    id = "e010d752f28dcd2804004d0b57ab1bdc4eca092895d49160204120af11d15f3e"
+    aggregation_method = "median"
+	max_spread_percent = 100.000000
+    min_responses = 1
+    response_type = "ufixed256x18"
+        [[queries.e010d752f28dcd2804004d0b57ab1bdc4eca092895d49160204120af11d15f3e.endpoints]]
+        endpoint_type = "coingeckoPro"
+        response_path = ["noble-dollar-usdn", "usd"]
+        params = { coin_id = "noble-dollar-usdn" }
+        market_id = "USDN-USD"
+        [[queries.e010d752f28dcd2804004d0b57ab1bdc4eca092895d49160204120af11d15f3e.endpoints]]
+        endpoint_type = "coinmarketcap"
+        response_path = ["data", "36538", "quote", "USD", "price"]
+        params = { id = "36538" }
+        market_id = "USDN-USD"
+
+    # --- Spot pricefeeds from og_market_params.toml (exchange sources only; id = keccak256(QueryData)) ---
+    [queries.a6f013ee236804827b77696d350e9f0ac3e879328f2a3021d473a0b778ad78ac]
+    id = "a6f013ee236804827b77696d350e9f0ac3e879328f2a3021d473a0b778ad78ac"
+    aggregation_method = "median"
+	max_spread_percent = 100.000000
+    min_responses = 3
+    response_type = "ufixed256x18"
+        [[queries.a6f013ee236804827b77696d350e9f0ac3e879328f2a3021d473a0b778ad78ac.endpoints]]
+        endpoint_type = "exchange"
+        exchange_id = "Binance"
+        market_id = "BTC-USD"
+        [[queries.a6f013ee236804827b77696d350e9f0ac3e879328f2a3021d473a0b778ad78ac.endpoints]]
+        endpoint_type = "exchange"
+        exchange_id = "BinanceUS"
+        market_id = "BTC-USD"
+        [[queries.a6f013ee236804827b77696d350e9f0ac3e879328f2a3021d473a0b778ad78ac.endpoints]]
+        endpoint_type = "exchange"
+        exchange_id = "Bitfinex"
+        market_id = "BTC-USD"
+        [[queries.a6f013ee236804827b77696d350e9f0ac3e879328f2a3021d473a0b778ad78ac.endpoints]]
+        endpoint_type = "exchange"
+        exchange_id = "Bitstamp"
+        market_id = "BTC-USD"
+        [[queries.a6f013ee236804827b77696d350e9f0ac3e879328f2a3021d473a0b778ad78ac.endpoints]]
+        endpoint_type = "exchange"
+        exchange_id = "CryptoCom"
+        market_id = "BTC-USD"
+        [[queries.a6f013ee236804827b77696d350e9f0ac3e879328f2a3021d473a0b778ad78ac.endpoints]]
+        endpoint_type = "exchange"
+        exchange_id = "Kraken"
+        market_id = "BTC-USD"
+        [[queries.a6f013ee236804827b77696d350e9f0ac3e879328f2a3021d473a0b778ad78ac.endpoints]]
+        endpoint_type = "exchange"
+        exchange_id = "Okx"
+        market_id = "BTC-USD"
+
+    [queries.83a7f3d48786ac2667503a61e8c415438ed2922eb86a2906e4ee66d9a2ce4992]
+    id = "83a7f3d48786ac2667503a61e8c415438ed2922eb86a2906e4ee66d9a2ce4992"
+    aggregation_method = "median"
+	max_spread_percent = 100.000000
+    min_responses = 3
+    response_type = "ufixed256x18"
+        [[queries.83a7f3d48786ac2667503a61e8c415438ed2922eb86a2906e4ee66d9a2ce4992.endpoints]]
+        endpoint_type = "exchange"
+        exchange_id = "Binance"
+        market_id = "ETH-USD"
+        [[queries.83a7f3d48786ac2667503a61e8c415438ed2922eb86a2906e4ee66d9a2ce4992.endpoints]]
+        endpoint_type = "exchange"
+        exchange_id = "BinanceUS"
+        market_id = "ETH-USD"
+        [[queries.83a7f3d48786ac2667503a61e8c415438ed2922eb86a2906e4ee66d9a2ce4992.endpoints]]
+        endpoint_type = "exchange"
+        exchange_id = "Bitfinex"
+        market_id = "ETH-USD"
+        [[queries.83a7f3d48786ac2667503a61e8c415438ed2922eb86a2906e4ee66d9a2ce4992.endpoints]]
+        endpoint_type = "exchange"
+        exchange_id = "Bitstamp"
+        market_id = "ETH-USD"
+        [[queries.83a7f3d48786ac2667503a61e8c415438ed2922eb86a2906e4ee66d9a2ce4992.endpoints]]
+        endpoint_type = "exchange"
+        exchange_id = "CryptoCom"
+        market_id = "ETH-USD"
+        [[queries.83a7f3d48786ac2667503a61e8c415438ed2922eb86a2906e4ee66d9a2ce4992.endpoints]]
+        endpoint_type = "exchange"
+        exchange_id = "Kraken"
+        market_id = "ETH-USD"
+        [[queries.83a7f3d48786ac2667503a61e8c415438ed2922eb86a2906e4ee66d9a2ce4992.endpoints]]
+        endpoint_type = "exchange"
+        exchange_id = "Okx"
+        market_id = "ETH-USD"
+
+    [queries.68a37787e65e85768d4aa6e385fb15760d46df0f67a18ec032d8fd5848aca264]
+    id = "68a37787e65e85768d4aa6e385fb15760d46df0f67a18ec032d8fd5848aca264"
+    aggregation_method = "median"
+	max_spread_percent = 100.000000
+    min_responses = 2
+    response_type = "ufixed256x18"
+        [[queries.68a37787e65e85768d4aa6e385fb15760d46df0f67a18ec032d8fd5848aca264.endpoints]]
+        endpoint_type = "exchange"
+        exchange_id = "BinanceUS"
+        market_id = "USDT-USD"
+        [[queries.68a37787e65e85768d4aa6e385fb15760d46df0f67a18ec032d8fd5848aca264.endpoints]]
+        endpoint_type = "exchange"
+        exchange_id = "Bitstamp"
+        market_id = "USDT-USD"
+        [[queries.68a37787e65e85768d4aa6e385fb15760d46df0f67a18ec032d8fd5848aca264.endpoints]]
+        endpoint_type = "exchange"
+        exchange_id = "CryptoCom"
+        market_id = "USDT-USD"
+
+    [queries.74c9cfdfd2e4a00a9437bf93bf6051e18e604a976f3fa37faafe0bb5a039431d]
+    id = "74c9cfdfd2e4a00a9437bf93bf6051e18e604a976f3fa37faafe0bb5a039431d"
+    aggregation_method = "median"
+	max_spread_percent = 100.000000
+    min_responses = 3
+    response_type = "ufixed256x18"
+        [[queries.74c9cfdfd2e4a00a9437bf93bf6051e18e604a976f3fa37faafe0bb5a039431d.endpoints]]
+        endpoint_type = "exchange"
+        exchange_id = "Binance"
+        market_id = "SAGA-USD"
+        [[queries.74c9cfdfd2e4a00a9437bf93bf6051e18e604a976f3fa37faafe0bb5a039431d.endpoints]]
+        endpoint_type = "exchange"
+        exchange_id = "Gate"
+        market_id = "SAGA-USD"
+        [[queries.74c9cfdfd2e4a00a9437bf93bf6051e18e604a976f3fa37faafe0bb5a039431d.endpoints]]
+        endpoint_type = "exchange"
+        exchange_id = "Huobi"
+        market_id = "SAGA-USD"
+        [[queries.74c9cfdfd2e4a00a9437bf93bf6051e18e604a976f3fa37faafe0bb5a039431d.endpoints]]
+        endpoint_type = "exchange"
+        exchange_id = "Kraken"
+        market_id = "SAGA-USD"
+        [[queries.74c9cfdfd2e4a00a9437bf93bf6051e18e604a976f3fa37faafe0bb5a039431d.endpoints]]
+        endpoint_type = "exchange"
+        exchange_id = "Mexc"
+        market_id = "SAGA-USD"
+
+    [queries.1808ab696a0b68ef13d854e21e188c794a3544a1746ac5d802d1a7d7a765cb51]
+    id = "1808ab696a0b68ef13d854e21e188c794a3544a1746ac5d802d1a7d7a765cb51"
+    aggregation_method = "median"
+	max_spread_percent = 100.000000
+    min_responses = 3
+    response_type = "ufixed256x18"
+        [[queries.1808ab696a0b68ef13d854e21e188c794a3544a1746ac5d802d1a7d7a765cb51.endpoints]]
+        endpoint_type = "exchange"
+        exchange_id = "BinanceUS"
+        market_id = "ATOM-USD"
+        [[queries.1808ab696a0b68ef13d854e21e188c794a3544a1746ac5d802d1a7d7a765cb51.endpoints]]
+        endpoint_type = "exchange"
+        exchange_id = "Kraken"
+        market_id = "ATOM-USD"
+        [[queries.1808ab696a0b68ef13d854e21e188c794a3544a1746ac5d802d1a7d7a765cb51.endpoints]]
+        endpoint_type = "exchange"
+        exchange_id = "CryptoCom"
+        market_id = "ATOM-USD"
+        [[queries.1808ab696a0b68ef13d854e21e188c794a3544a1746ac5d802d1a7d7a765cb51.endpoints]]
+        endpoint_type = "exchange"
+        exchange_id = "Okx"
+        market_id = "ATOM-USD"
+        [[queries.1808ab696a0b68ef13d854e21e188c794a3544a1746ac5d802d1a7d7a765cb51.endpoints]]
+        endpoint_type = "exchange"
+        exchange_id = "CoinbaseRates"
+        market_id = "ATOM-USD"
+
+    [queries.907154958baee4fb0ce2bbe50728141ac76eb2dc1731b3d40f0890746dd07e62]
+    id = "907154958baee4fb0ce2bbe50728141ac76eb2dc1731b3d40f0890746dd07e62"
+    aggregation_method = "median"
+	max_spread_percent = 100.000000
+    min_responses = 1
+    response_type = "ufixed256x18"
+        [[queries.907154958baee4fb0ce2bbe50728141ac76eb2dc1731b3d40f0890746dd07e62.endpoints]]
+        endpoint_type = "exchange"
+        exchange_id = "Huobi"
+        market_id = "STETH-USD"
+        [[queries.907154958baee4fb0ce2bbe50728141ac76eb2dc1731b3d40f0890746dd07e62.endpoints]]
+        endpoint_type = "exchange"
+        exchange_id = "Okx"
+        market_id = "STETH-USD"
+        [[queries.907154958baee4fb0ce2bbe50728141ac76eb2dc1731b3d40f0890746dd07e62.endpoints]]
+        endpoint_type = "exchange"
+        exchange_id = "Gate"
+        market_id = "STETH-USD"
+
+    [queries.abe37d8c8c5be832b32d3cb114f35cb8ebade267bce4ee17aa897b1cb034db96]
+    id = "abe37d8c8c5be832b32d3cb114f35cb8ebade267bce4ee17aa897b1cb034db96"
+    aggregation_method = "median"
+	max_spread_percent = 100.000000
+    min_responses = 1
+    response_type = "ufixed256x18"
+        [[queries.abe37d8c8c5be832b32d3cb114f35cb8ebade267bce4ee17aa897b1cb034db96.endpoints]]
+        endpoint_type = "exchange"
+        exchange_id = "Kraken"
+        market_id = "USDE-USD"
+        [[queries.abe37d8c8c5be832b32d3cb114f35cb8ebade267bce4ee17aa897b1cb034db96.endpoints]]
+        endpoint_type = "exchange"
+        exchange_id = "Gate"
+        market_id = "USDE-USD"
+        [[queries.abe37d8c8c5be832b32d3cb114f35cb8ebade267bce4ee17aa897b1cb034db96.endpoints]]
+        endpoint_type = "exchange"
+        exchange_id = "Kucoin"
+        market_id = "USDE-USD"
+        [[queries.abe37d8c8c5be832b32d3cb114f35cb8ebade267bce4ee17aa897b1cb034db96.endpoints]]
+        endpoint_type = "exchange"
+        exchange_id = "Binance"
+        market_id = "USDE-USD"
+
+    [queries.5c13cd9c97dbb98f2429c101a2a8150e6c7a0ddaff6124ee176a3a411067ded0]
+    id = "5c13cd9c97dbb98f2429c101a2a8150e6c7a0ddaff6124ee176a3a411067ded0"
+    aggregation_method = "median"
+	max_spread_percent = 100.000000
+    min_responses = 3
+    response_type = "ufixed256x18"
+        [[queries.5c13cd9c97dbb98f2429c101a2a8150e6c7a0ddaff6124ee176a3a411067ded0.endpoints]]
+        endpoint_type = "exchange"
+        exchange_id = "Binance"
+        market_id = "TRB-USD"
+        [[queries.5c13cd9c97dbb98f2429c101a2a8150e6c7a0ddaff6124ee176a3a411067ded0.endpoints]]
+        endpoint_type = "exchange"
+        exchange_id = "CryptoCom"
+        market_id = "TRB-USD"
+        [[queries.5c13cd9c97dbb98f2429c101a2a8150e6c7a0ddaff6124ee176a3a411067ded0.endpoints]]
+        endpoint_type = "exchange"
+        exchange_id = "Okx"
+        market_id = "TRB-USD"
+        [[queries.5c13cd9c97dbb98f2429c101a2a8150e6c7a0ddaff6124ee176a3a411067ded0.endpoints]]
+        endpoint_type = "exchange"
+        exchange_id = "CoinbaseRates"
+        market_id = "TRB-USD"
+
+    [queries.8ee44cd434ed5b0e007eee581fbe0855336f3f84484e8d9989a620a4a49aa0f7]
+    id = "8ee44cd434ed5b0e007eee581fbe0855336f3f84484e8d9989a620a4a49aa0f7"
+    aggregation_method = "median"
+	max_spread_percent = 100.000000
+    min_responses = 2
+    response_type = "ufixed256x18"
+        [[queries.8ee44cd434ed5b0e007eee581fbe0855336f3f84484e8d9989a620a4a49aa0f7.endpoints]]
+        endpoint_type = "exchange"
+        exchange_id = "Binance"
+        market_id = "USDC-USD"
+        [[queries.8ee44cd434ed5b0e007eee581fbe0855336f3f84484e8d9989a620a4a49aa0f7.endpoints]]
+        endpoint_type = "exchange"
+        exchange_id = "Okx"
+        market_id = "USDC-USD"
+        [[queries.8ee44cd434ed5b0e007eee581fbe0855336f3f84484e8d9989a620a4a49aa0f7.endpoints]]
+        endpoint_type = "exchange"
+        exchange_id = "Huobi"
+        market_id = "USDC-USD"
+        [[queries.8ee44cd434ed5b0e007eee581fbe0855336f3f84484e8d9989a620a4a49aa0f7.endpoints]]
+        endpoint_type = "exchange"
+        exchange_id = "Bitstamp"
+        market_id = "USDC-USD"
+        [[queries.8ee44cd434ed5b0e007eee581fbe0855336f3f84484e8d9989a620a4a49aa0f7.endpoints]]
+        endpoint_type = "exchange"
+        exchange_id = "Gate"
+        market_id = "USDC-USD"
+        [[queries.8ee44cd434ed5b0e007eee581fbe0855336f3f84484e8d9989a620a4a49aa0f7.endpoints]]
+        endpoint_type = "exchange"
+        exchange_id = "Kraken"
+        market_id = "USDC-USD"
+        [[queries.8ee44cd434ed5b0e007eee581fbe0855336f3f84484e8d9989a620a4a49aa0f7.endpoints]]
+        endpoint_type = "exchange"
+        exchange_id = "Kucoin"
+        market_id = "USDC-USD"
+        [[queries.8ee44cd434ed5b0e007eee581fbe0855336f3f84484e8d9989a620a4a49aa0f7.endpoints]]
+        endpoint_type = "exchange"
+        exchange_id = "Mexc"
+        market_id = "USDC-USD"

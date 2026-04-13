@@ -48,7 +48,8 @@ func FetchPrice(
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	totalEndpoints := len(query.RpcReaders) + len(query.ContractReaders) + len(query.CombinedReaders)
+	totalEndpoints := len(query.RpcReaders) + len(query.ContractReaders) + len(query.CombinedReaders) +
+		len(query.ExchangeReaders)
 	results := make(chan Result, totalEndpoints)
 	var wg sync.WaitGroup
 
@@ -79,6 +80,13 @@ func FetchPrice(
 			result := fetchFromCombinedEndpoint(ctx, ep, priceCache)
 			results <- result
 		}(combinedHandler)
+	}
+	for _, exchangeHandler := range query.ExchangeReaders {
+		wg.Add(1)
+		go func(ep ExchangeHandler) {
+			defer wg.Done()
+			results <- fetchFromExchangeEndpoint(ctx, ep, priceCache, nil)
+		}(exchangeHandler)
 	}
 	// Close results channel when all goroutines complete
 	go func() {
@@ -130,6 +138,7 @@ func emitPriceForTelemetry(result Result, query QueryConfig) {
 		[]gometrics.Label{
 			metrics.GetLabelForStringValue(metrics.MarketId, result.MarketId),
 			metrics.GetLabelForStringValue(metrics.ExchangeId, result.SourceId),
+			metrics.GetLabelForStringValue(metrics.QueryId, query.ID),
 		},
 	)
 }
@@ -141,6 +150,7 @@ func emitSuccessForTelemetry(result Result, query QueryConfig) {
 		[]gometrics.Label{
 			metrics.GetLabelForStringValue(metrics.MarketId, result.MarketId),
 			metrics.GetLabelForStringValue(metrics.ExchangeId, result.SourceId),
+			metrics.GetLabelForStringValue(metrics.QueryId, query.ID),
 		},
 	)
 }
@@ -152,6 +162,7 @@ func emitErrorForTelemetry(result Result, query QueryConfig) {
 		[]gometrics.Label{
 			metrics.GetLabelForStringValue(metrics.MarketId, result.MarketId),
 			metrics.GetLabelForStringValue(metrics.ExchangeId, result.SourceId),
+			metrics.GetLabelForStringValue(metrics.QueryId, query.ID),
 			metrics.GetLabelForStringValue(metrics.Reason, result.Err.Error()),
 		},
 	)

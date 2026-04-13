@@ -1,0 +1,27 @@
+# Example unified oracle TOML: add alongside your existing [endpoints], [rpc_endpoints], and [queries.*] blocks.
+# With [[markets]] present, market_params.toml is not required for the daemon.
+
+[[markets]]
+id = 69
+pair = "TRB/USD"
+exponent = -6
+query_data = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff" # replace with real hex query bytes
+min_exchanges = 1
+min_price_change_ppm = 50
+exchange_config_json = "{}"
+
+# Example query snippet (merge into your real [queries.<name>] sections):
+# id = "..."           # keccak / query id hex
+# chain_market_id = 69 # optional if resolvable from [[markets]] query_data
+# exponent = -6        # optional override for scaling
+
+# Exchange endpoint snippet:
+# [[queries.example.endpoints]]
+# endpoint_type = "exchange"
+# exchange_id = "Binance"
+# ticker = "TRBUSDT"           # required for TOML-defined legs; omit to use static defaults
+# invert = false
+# adjust_by_market_id = 0      # optional
+# adjust_ticker = ""           # required when adjust_by_market_id != 0
+# use_cache = true
+# market_id = "TRB-USD"      # optional telemetry label (string)

@@ -54,8 +54,16 @@ const (
     {{- range $idx, $endpoint := $query.Endpoints }}
         [[queries.{{ $key }}.endpoints]]
         endpoint_type = "{{ $endpoint.EndpointType }}"
+        {{- if $endpoint.ExchangeID }}
+        exchange_id = "{{ $endpoint.ExchangeID }}"
+        {{- end }}
+        {{- if $endpoint.Ticker }}
+        ticker = "{{ $endpoint.Ticker }}"
+        {{- end }}
+        {{- if ne $endpoint.EndpointType "exchange" }}
         response_path = [{{ range $i, $path := $endpoint.ResponsePath }}{{if $i}}, {{end}}"{{ $path }}"{{ end }}]
         params = { {{ formatParams $endpoint.Params }} }
+        {{- end }}
 		{{- if $endpoint.MarketId }}
         market_id = "{{ $endpoint.MarketId }}"
 		{{- end }}

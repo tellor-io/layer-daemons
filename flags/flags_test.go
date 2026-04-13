@@ -22,6 +22,9 @@ func TestAddDaemonFlagsToCmd(t *testing.T) {
 
 		flags.FlagPriceDaemonLoopDelayMs,
 		flags.FlagBatchableRefreshIntervalMs,
+		flags.FlagExchangeCacheRefreshIntervalMs,
+		flags.FlagOracleConfigFile,
+		flags.FlagOracleConfigDir,
 	}
 
 	for _, v := range tests {
@@ -41,6 +44,7 @@ func TestGetDaemonFlagValuesFromOptions_Custom(t *testing.T) {
 
 	optsMap[flags.FlagPriceDaemonLoopDelayMs] = uint32(4444)
 	optsMap[flags.FlagBatchableRefreshIntervalMs] = uint32(5555)
+	optsMap[flags.FlagExchangeCacheRefreshIntervalMs] = uint32(6666)
 
 	mockOpts := mocks.AppOptions{}
 	mockOpts.On("Get", mock.Anything).
@@ -62,6 +66,7 @@ func TestGetDaemonFlagValuesFromOptions_Custom(t *testing.T) {
 	// Price Daemon.
 	require.Equal(t, optsMap[flags.FlagPriceDaemonLoopDelayMs], r.Price.LoopDelayMs)
 	require.Equal(t, optsMap[flags.FlagBatchableRefreshIntervalMs], r.Price.BatchableRefreshIntervalMs)
+	require.Equal(t, optsMap[flags.FlagExchangeCacheRefreshIntervalMs], r.Price.ExchangeCacheRefreshIntervalMs)
 }
 
 func TestGetDaemonFlagValuesFromOptions_Default(t *testing.T) {

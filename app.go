@@ -8,7 +8,6 @@ import (
 
 	"github.com/spf13/cast"
 	"github.com/tellor-io/layer-daemons/appconfig"
-	"github.com/tellor-io/layer-daemons/configs"
 	"github.com/tellor-io/layer-daemons/constants"
 	customquery "github.com/tellor-io/layer-daemons/custom_query"
 	daemonflags "github.com/tellor-io/layer-daemons/flags"
@@ -55,17 +54,18 @@ func NewApp(
 	}
 	appOpts := simtestutil.NewAppOptionsWithFlagHome(tempDir())
 	daemonFlags := daemonflags.GetDaemonFlagValuesFromOptions(appOpts)
-	marketParamsConfig := configs.ReadMarketParamsConfigFile(homePath)
-	customquery.SetMarketParamsForQueryResolver(marketParamsConfig)
 
-	queries, err := customquery.BuildQueryEndpoints(homePath, "config", "custom_query_config.toml")
+	cfgFile := daemonFlags.Price.OracleConfigFile
+	cfgDir := daemonFlags.Price.OracleConfigDir
+
+	queries, marketParamsConfig, err := customquery.BuildQueryEndpoints(homePath, cfgDir, cfgFile)
 	if err != nil {
 		panic(err)
 	}
 
-	// Phase 0 fail-fast: ensure every custom_query QueryConfig.ID maps to a chain market param.
-	for queryID := range queries {
-		if _, err := customquery.ResolveMarketIdForQuery(queryID); err != nil {
+	// Phase 0 fail-fast: ensure every custom_query resolves to a chain market id.
+	for _, q := range queries {
+		if _, err := customquery.ResolveMarketIDForQueryConfig(q); err != nil {
 			panic(err)
 		}
 	}
@@ -76,11 +76,20 @@ func NewApp(
 		context.Background(),
 		logger,
 		homePath,
-		"config",
-		"custom_query_config.toml",
+		cfgDir,
+		cfgFile,
 		queries,
 		indexPriceCache,
 		time.Duration(daemonFlags.Price.BatchableRefreshIntervalMs)*time.Millisecond,
+	); err != nil {
+		panic(err)
+	}
+	if err := customquery.StartExchangeRefresher(
+		context.Background(),
+		logger,
+		queries,
+		indexPriceCache,
+		time.Duration(daemonFlags.Price.ExchangeCacheRefreshIntervalMs)*time.Millisecond,
 	); err != nil {
 		panic(err)
 	}

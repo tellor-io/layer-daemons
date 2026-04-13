@@ -10,6 +10,7 @@ import (
 	"github.com/pelletier/go-toml"
 	contractreader "github.com/tellor-io/layer-daemons/custom_query/contracts/contract_reader"
 	rpcreader "github.com/tellor-io/layer-daemons/custom_query/rpc/rpc_reader"
+	pricefeedtypes "github.com/tellor-io/layer-daemons/pricefeed/client/types"
 )
 
 type EndpointTemplate struct {
@@ -29,6 +30,7 @@ type Config struct {
 	Endpoints    map[string]EndpointTemplate    `toml:"endpoints"`
 	RPCEndpoints map[string]RPCEndpointTemplate `toml:"rpc_endpoints"`
 	Queries      map[string]QueryConfig         `toml:"queries"`
+	Markets      []OracleMarketEntry            `toml:"markets"`
 }
 
 type ContractHandler struct {
@@ -52,6 +54,20 @@ type RpcHandler struct {
 	SourceId   string
 }
 
+// ExchangeHandler holds a validated exchange (pricefeed) price source for a query.
+// Ticker, adjust-by, and inversion come from canonical market params (Phase 1); live/cache fetch is Phase 3+.
+type ExchangeHandler struct {
+	ExchangeID    pricefeedtypes.ExchangeId
+	QueryID       string
+	MarketId      string // TOML market_id or chain MarketId string for telemetry
+	ChainMarketID pricefeedtypes.MarketId
+	SourceId      string
+	UseCache      bool
+	MarketConfig  pricefeedtypes.MarketConfig
+	// AdjustMarketConfig is set when MarketConfig.AdjustByMarket is non-nil (canonical config for that leg).
+	AdjustMarketConfig *pricefeedtypes.MarketConfig
+}
+
 type CombinedHandler struct {
 	Handler          string
 	ContractReaders  map[string]*contractreader.Reader
@@ -67,9 +83,20 @@ type QueryConfig struct {
 	ResponseType      string            `toml:"response_type"`
 	MaxSpreadPercent  float64           `toml:"max_spread_percent"`
 	Endpoints         []EndpointConfig  `toml:"endpoints"`
+	// ChainMarketID optional: explicit chain spot market id (uint32). When 0, resolved via market params / [[markets]].
+	ChainMarketID uint32 `toml:"chain_market_id"`
+	// Exponent optional override for scaling when using [[markets]] or inline market metadata.
+	Exponent int32 `toml:"exponent"`
+	// QueryData / pair / market metadata for unified config without [[markets]] row.
+	QueryData               string `toml:"query_data"`
+	Pair                    string `toml:"pair"`
+	MarketMinExchanges      uint32 `toml:"market_min_exchanges"`
+	MarketMinPriceChangePpm uint32 `toml:"market_min_price_change_ppm"`
+	MarketExchangeConfigJSON string `toml:"market_exchange_config_json"`
 	ContractReaders   []ContractHandler `toml:"-"`
 	RpcReaders        []RpcHandler      `toml:"-"`
 	CombinedReaders   []CombinedHandler `toml:"-"`
+	ExchangeReaders   []ExchangeHandler `toml:"-"`
 }
 
 type EndpointConfig struct {
@@ -91,12 +118,20 @@ type EndpointConfig struct {
 	// Combined handler fields
 	CombinedSources map[string]string `toml:"combined_sources"`
 	CombinedConfig  map[string]any    `toml:"combined_config"`
+
+	// Exchange (pricefeed) endpoint — ticker/adjust from TOML, or from compiled static
+	// market params when ticker is omitted (same defaults as legacy pricefeed ExchangeConfigJson).
+	// Invert uses the field above for exchange endpoints.
+	ExchangeID       string `toml:"exchange_id"`
+	Ticker           string `toml:"ticker"`
+	AdjustByMarketID uint32 `toml:"adjust_by_market_id"`
+	AdjustTicker     string `toml:"adjust_ticker"`
 }
 
-func BuildQueryEndpoints(homeDir, localDir, file string) (map[string]QueryConfig, error) {
+func BuildQueryEndpoints(homeDir, localDir, file string) (map[string]QueryConfig, []pricefeedtypes.MarketParam, error) {
 	config, err := readAndParseConfig(homeDir, localDir, file)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	// Process RPC endpoints
@@ -127,16 +162,26 @@ func BuildQueryEndpoints(homeDir, localDir, file string) (map[string]QueryConfig
 	processApiKeys(&config)
 	time.Sleep(2 * time.Second) // brief pause for readability
 
+	marketParams, expOverrides, err := PrepareDaemonMarketParams(homeDir, config)
+	if err != nil {
+		return nil, nil, err
+	}
+	SetMarketParamsForQueryResolver(marketParams)
+	SetUnifiedExponentOverrides(expOverrides)
+
+	exchangeLegRegistry := make(map[exchangeLegKey]pricefeedtypes.MarketConfig)
+
 	// for each query in the query map, build the endpoints
 	for _, query := range config.Queries {
 		contractReaders := make([]ContractHandler, 0)
 		rpcReaders := make([]RpcHandler, 0)
 		combinedReaders := make([]CombinedHandler, 0)
+		exchangeReaders := make([]ExchangeHandler, 0)
 		for _, endpoint := range query.Endpoints {
 			// Handle combined endpoints
 			if endpoint.EndpointType == "combined" {
 				if endpoint.Handler == "" {
-					return nil, fmt.Errorf("combined endpoint missing handler for query %s", query.ID)
+					return nil, nil, fmt.Errorf("combined endpoint missing handler for query %s", query.ID)
 				}
 
 				// Build contract readers for combined handler
@@ -148,12 +193,12 @@ func BuildQueryEndpoints(homeDir, localDir, file string) (map[string]QueryConfig
 					if found {
 						urls, exists := processedRPCEndpoints[chain]
 						if !exists {
-							return nil, fmt.Errorf("no RPC endpoints configured for chain %s in combined source %s for query %s",
+							return nil, nil, fmt.Errorf("no RPC endpoints configured for chain %s in combined source %s for query %s",
 								chain, sourceName, query.ID)
 						}
 						reader, err := contractreader.NewReader(urls, 3)
 						if err != nil {
-							return nil, fmt.Errorf("failed to create contract reader for combined source %s in query %s: %w",
+							return nil, nil, fmt.Errorf("failed to create contract reader for combined source %s in query %s: %w",
 								sourceName, query.ID, err)
 						}
 						contractReadersMap[sourceName] = reader
@@ -162,7 +207,7 @@ func BuildQueryEndpoints(homeDir, localDir, file string) (map[string]QueryConfig
 						if found {
 							template, exists := config.Endpoints[endpointType]
 							if !exists {
-								return nil, fmt.Errorf("RPC endpoint template not found: %s for combined source %s in query %s",
+								return nil, nil, fmt.Errorf("RPC endpoint template not found: %s for combined source %s in query %s",
 									endpointType, sourceName, query.ID)
 							}
 
@@ -207,7 +252,7 @@ func BuildQueryEndpoints(homeDir, localDir, file string) (map[string]QueryConfig
 							reader, err := rpcreader.NewReader(url, template.Method, template.Query,
 								processedHeaders, responsePath, template.Timeout)
 							if err != nil {
-								return nil, fmt.Errorf("failed to create RPC reader for combined source %s in query %s: %w",
+								return nil, nil, fmt.Errorf("failed to create RPC reader for combined source %s in query %s: %w",
 									sourceName, query.ID, err)
 							}
 							rpcReadersMap[sourceName] = reader
@@ -250,18 +295,27 @@ func BuildQueryEndpoints(homeDir, localDir, file string) (map[string]QueryConfig
 				continue
 			}
 
+			if endpoint.EndpointType == "exchange" {
+				h, err := buildExchangeHandler(query, endpoint, exchangeLegRegistry)
+				if err != nil {
+					return nil, nil, err
+				}
+				exchangeReaders = append(exchangeReaders, h)
+				continue
+			}
+
 			if endpoint.EndpointType == "contract" {
 				if endpoint.Handler == "" || endpoint.Chain == "" {
-					return nil, fmt.Errorf("contract endpoint missing required fields (handler, chain) for query %s", query.ID)
+					return nil, nil, fmt.Errorf("contract endpoint missing required fields (handler, chain) for query %s", query.ID)
 				}
 
 				urls, exists := processedRPCEndpoints[endpoint.Chain]
 				if !exists {
-					return nil, fmt.Errorf("no RPC endpoints configured for chain %s in query %s", endpoint.Chain, query.ID)
+					return nil, nil, fmt.Errorf("no RPC endpoints configured for chain %s in query %s", endpoint.Chain, query.ID)
 				}
 				contractReader, err := contractreader.NewReader(urls, 3) // 3 second timeout
 				if err != nil {
-					return nil, fmt.Errorf("failed to create contract reader for chain %s in query %s: %w", endpoint.Chain, query.ID, err)
+					return nil, nil, fmt.Errorf("failed to create contract reader for chain %s in query %s: %w", endpoint.Chain, query.ID, err)
 				}
 
 				contractReaders = append(contractReaders, ContractHandler{
@@ -276,14 +330,14 @@ func BuildQueryEndpoints(homeDir, localDir, file string) (map[string]QueryConfig
 			// Regular REST API endpoint handling (existing logic)
 			template, exists := config.Endpoints[endpoint.EndpointType]
 			if !exists {
-				return nil, fmt.Errorf("endpoint template not found: %s for query %s",
+				return nil, nil, fmt.Errorf("endpoint template not found: %s for query %s",
 					endpoint.EndpointType, query.ID)
 			}
 
 			// Cache policy validation (phase 1)
 			// If use_cache is enabled, the endpoint template must support batch refresh.
 			if endpoint.UseCache && !template.Batchable {
-				return nil, fmt.Errorf(
+				return nil, nil, fmt.Errorf(
 					"invalid cache policy for query %s endpoint %s: use_cache=true but endpoint template is not batchable",
 					query.ID,
 					endpoint.EndpointType,
@@ -307,7 +361,7 @@ func BuildQueryEndpoints(homeDir, localDir, file string) (map[string]QueryConfig
 						url = strings.ReplaceAll(url, "{api_key}", template.ApiKey)
 						continue
 					}
-					return nil, fmt.Errorf("missing required parameter %s for endpoint %s in query %s",
+					return nil, nil, fmt.Errorf("missing required parameter %s for endpoint %s in query %s",
 						paramName, endpoint.EndpointType, query.ID)
 				}
 			}
@@ -319,7 +373,7 @@ func BuildQueryEndpoints(homeDir, localDir, file string) (map[string]QueryConfig
 
 			// Check if any placeholders remain
 			if placeholderRegex.MatchString(url) {
-				return nil, fmt.Errorf("some placeholders were not replaced in URL: %s", url)
+				return nil, nil, fmt.Errorf("some placeholders were not replaced in URL: %s", url)
 			}
 			processedHeaders := make(map[string]string)
 			for key, value := range template.Headers {
@@ -338,7 +392,7 @@ func BuildQueryEndpoints(homeDir, localDir, file string) (map[string]QueryConfig
 
 			rpcReader, err := rpcreader.NewReader(url, template.Method, processedQuery, processedHeaders, endpoint.ResponsePath, template.Timeout)
 			if err != nil {
-				return nil, fmt.Errorf("failed to create RPC reader for endpoint %s in query %s: %w", endpoint.EndpointType, query.ID, err)
+				return nil, nil, fmt.Errorf("failed to create RPC reader for endpoint %s in query %s: %w", endpoint.EndpointType, query.ID, err)
 			}
 			rpcReaders = append(rpcReaders, RpcHandler{
 				Handler:    endpoint.Handler,
@@ -355,19 +409,27 @@ func BuildQueryEndpoints(homeDir, localDir, file string) (map[string]QueryConfig
 			})
 		}
 		queryMap[query.ID] = QueryConfig{
-			ID:                query.ID,
-			AggregationMethod: query.AggregationMethod,
-			MaxSpreadPercent:  query.MaxSpreadPercent,
-			MinResponses:      query.MinResponses,
-			ResponseType:      query.ResponseType,
-			Endpoints:         query.Endpoints,
-			ContractReaders:   contractReaders,
-			RpcReaders:        rpcReaders,
-			CombinedReaders:   combinedReaders,
+			ID:                       query.ID,
+			AggregationMethod:        query.AggregationMethod,
+			MaxSpreadPercent:         query.MaxSpreadPercent,
+			MinResponses:             query.MinResponses,
+			ResponseType:             query.ResponseType,
+			Endpoints:                query.Endpoints,
+			ChainMarketID:            query.ChainMarketID,
+			Exponent:                 query.Exponent,
+			QueryData:                query.QueryData,
+			Pair:                     query.Pair,
+			MarketMinExchanges:       query.MarketMinExchanges,
+			MarketMinPriceChangePpm:  query.MarketMinPriceChangePpm,
+			MarketExchangeConfigJSON: query.MarketExchangeConfigJSON,
+			ContractReaders:          contractReaders,
+			RpcReaders:               rpcReaders,
+			CombinedReaders:          combinedReaders,
+			ExchangeReaders:          exchangeReaders,
 		}
 	}
 
-	return queryMap, nil
+	return queryMap, marketParams, nil
 }
 
 func readAndParseConfig(homeDir, localDir, file string) (Config, error) {

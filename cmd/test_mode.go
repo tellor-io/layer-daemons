@@ -42,7 +42,7 @@ func runTestMode(homePath string, logger log.Logger) error {
 
 	// Load custom queries
 	logger.Info("Loading custom query configurations...")
-	customQueries, err := customquery.BuildQueryEndpoints(homePath, "config", "custom_query_config.toml")
+	customQueries, _, err := customquery.BuildQueryEndpoints(homePath, "config", "custom_query_config.toml")
 	if err != nil {
 		logger.Warn("Failed to load custom queries (may not exist)", "error", err)
 		customQueries = make(map[string]customquery.QueryConfig)

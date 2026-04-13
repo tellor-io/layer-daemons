@@ -158,7 +158,7 @@ func TestMergeCustomQueryConfig(t *testing.T) {
 			require.NoError(t, err)
 
 			// Read merged config
-			mergedConfig, err := customquery.BuildQueryEndpoints(testDir, localDir, fileName)
+			mergedConfig, _, err := customquery.BuildQueryEndpoints(testDir, localDir, fileName)
 			require.NoError(t, err)
 
 			// Read raw config to check endpoints and rpc_endpoints

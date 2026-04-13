@@ -1,9 +1,11 @@
 package customquery
 
 import (
+	"encoding/hex"
 	"fmt"
 	"strings"
 
+	"github.com/ethereum/go-ethereum/crypto"
 	pricefeedtypes "github.com/tellor-io/layer-daemons/pricefeed/client/types"
 )
 
@@ -24,9 +26,10 @@ func normalizeHex(s string) string {
 
 // ResolveMarketIdForQuery resolves a custom_query QueryConfig.ID (query ID hex) into the chain market param id.
 //
-// Semantics (phase 0):
-// - Every custom_query query id to be priced is assumed to have a corresponding chain market param
-//   where MarketParam.QueryData matches hex(queryId).
+// Matches in order:
+//  1. MarketParam.QueryData hex equals queryIDHex (after normalize) — legacy/direct form used in tests.
+//  2. queryIDHex equals hex(keccak256(decoded MarketParam.QueryData)) — matches reporter
+//     github.com/tellor-io/layer/utils.QueryIDFromData(chain query bytes) and [[queries.*]] id keys.
 func ResolveMarketIdForQuery(queryIDHex string) (marketId uint32, err error) {
 	if len(marketParamsForQueryResolver) == 0 {
 		return 0, fmt.Errorf("market params not configured for ResolveMarketIdForQuery")
@@ -38,7 +41,16 @@ func ResolveMarketIdForQuery(queryIDHex string) (marketId uint32, err error) {
 	}
 
 	for _, marketParam := range marketParamsForQueryResolver {
-		if normalizeHex(marketParam.QueryData) == q {
+		qd := normalizeHex(marketParam.QueryData)
+		if qd == q {
+			return marketParam.Id, nil
+		}
+		raw, err := hex.DecodeString(qd)
+		if err != nil || len(raw) == 0 {
+			continue
+		}
+		idHex := hex.EncodeToString(crypto.Keccak256(raw))
+		if idHex == q {
 			return marketParam.Id, nil
 		}
 	}
@@ -46,3 +58,11 @@ func ResolveMarketIdForQuery(queryIDHex string) (marketId uint32, err error) {
 	return 0, fmt.Errorf("no market param found for query id %s", q)
 }
 
+// ResolveMarketIDForQueryConfig resolves the chain market id for a built query config.
+// It prefers query.ChainMarketID when set, otherwise ResolveMarketIdForQuery(query.ID).
+func ResolveMarketIDForQueryConfig(q QueryConfig) (uint32, error) {
+	if q.ChainMarketID != 0 {
+		return q.ChainMarketID, nil
+	}
+	return ResolveMarketIdForQuery(q.ID)
+}

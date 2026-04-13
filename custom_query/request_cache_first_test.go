@@ -8,6 +8,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"github.com/tellor-io/layer-daemons/constants"
+	"github.com/tellor-io/layer-daemons/exchange_common"
 	pricefeedtypes "github.com/tellor-io/layer-daemons/pricefeed/client/types"
 	servertypes "github.com/tellor-io/layer-daemons/server/types/daemons"
 	pricefeedservertypes "github.com/tellor-io/layer-daemons/server/types/pricefeed"
@@ -21,8 +22,8 @@ func TestFetchPrice_CacheFirstBatchableEndpoint_Success(t *testing.T) {
 
 	origMarketParam := constants.StaticMarketParamsConfig[marketID]
 	constants.StaticMarketParamsConfig[marketID] = &pricefeedtypes.MarketParam{
-		Id:       marketID,
-		Exponent: -6,
+		Id:        marketID,
+		Exponent:  -6,
 		QueryData: queryID,
 	}
 	defer func() {
@@ -301,3 +302,69 @@ func TestFetchPrice_CacheFirstBatchableEndpoints_MinResponsesFailsWithOneStale(t
 	require.True(t, strings.Contains(err.Error(), "insufficient successful responses"))
 }
 
+func TestFetchPrice_ExchangeCacheEndpoint_Success(t *testing.T) {
+	const (
+		queryID  = "excache01"
+		marketID = uint32(900006)
+	)
+
+	origMarketParam := constants.StaticMarketParamsConfig[marketID]
+	constants.StaticMarketParamsConfig[marketID] = &pricefeedtypes.MarketParam{
+		Id:        marketID,
+		Exponent:  -6,
+		QueryData: queryID,
+	}
+	defer func() {
+		if origMarketParam != nil {
+			constants.StaticMarketParamsConfig[marketID] = origMarketParam
+		} else {
+			delete(constants.StaticMarketParamsConfig, marketID)
+		}
+	}()
+
+	origResolverParams := marketParamsForQueryResolver
+	SetMarketParamsForQueryResolver([]pricefeedtypes.MarketParam{
+		{Id: marketID, QueryData: queryID},
+	})
+	defer SetMarketParamsForQueryResolver(origResolverParams)
+
+	priceCache := pricefeedservertypes.NewMarketToExchangePrices(1 * time.Minute)
+	now := time.Now()
+	priceCache.UpdatePrices([]*servertypes.MarketPriceUpdate{
+		{
+			MarketId: marketID,
+			ExchangePrices: []*servertypes.ExchangePrice{
+				{
+					ExchangeId:     exchange_common.EXCHANGE_ID_BINANCE,
+					Price:          1_500_000,
+					LastUpdateTime: &now,
+				},
+			},
+		},
+	})
+
+	query := QueryConfig{
+		ID:                queryID,
+		AggregationMethod: "median",
+		MaxSpreadPercent:  100.0,
+		MinResponses:      1,
+		ResponseType:      "ufixed256x18",
+		ExchangeReaders: []ExchangeHandler{
+			{
+				ExchangeID:    exchange_common.EXCHANGE_ID_BINANCE,
+				ChainMarketID: marketID,
+				QueryID:       queryID,
+				MarketId:      "TEST-USD",
+				UseCache:      true,
+			},
+		},
+	}
+
+	result, err := FetchPrice(context.Background(), query, priceCache)
+	require.NoError(t, err)
+	require.NotEmpty(t, result.EncodedValue)
+	require.Len(t, result.RawResults, 1)
+	require.NoError(t, result.RawResults[0].Err)
+	require.InDelta(t, 1.5, result.RawResults[0].Value, 1e-9)
+	require.Equal(t, exchange_common.EXCHANGE_ID_BINANCE, result.RawResults[0].SourceId)
+}
