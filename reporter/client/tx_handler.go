@@ -27,11 +27,23 @@ var (
 	BRIDGE_REPORT_TYPE = reflect.TypeOf("bridge_deposit_report")
 )
 
+// invalidateGasEstimate removes the cached gas estimate for the given message
+// type, forcing the next transaction to re-simulate gas against current chain
+// state. This is called when a transaction fails with out-of-gas (code 11) so
+// that stale estimates from earlier simulations don't keep causing failures.
+func invalidateGasEstimate(isBridge bool, msg ...sdk.Msg) {
+	if isBridge {
+		delete(gasEstimateMap, BRIDGE_REPORT_TYPE)
+	} else if len(msg) > 0 {
+		delete(gasEstimateMap, reflect.TypeOf(msg[0]))
+	}
+}
+
 func newFactory(clientCtx client.Context) tx.Factory {
 	return tx.Factory{}.
 		WithChainID(clientCtx.ChainID).
 		WithKeybase(clientCtx.Keyring).
-		WithGasAdjustment(1.25).
+		WithGasAdjustment(1.5).
 		WithGas(defaultGas).
 		WithSignMode(signing.SignMode_SIGN_MODE_DIRECT).
 		WithAccountRetriever(clientCtx.AccountRetriever).
@@ -220,12 +232,20 @@ func (c *Client) sendTx(ctx context.Context, queryMetaId uint64, isBridge bool, 
 	}
 	c.logger.Info(fmt.Sprintf("transaction hash: %s", res.TxHash))
 	c.logger.Info(fmt.Sprintf("response after submit message: %d", txnResponse.TxResult.Code))
-	if txnResponse.TxResult.Code == 0 {
-		txSuccess = true // Prevent defer cleanup - keep queryMeta marked as committed
+	switch txnResponse.TxResult.Code {
+	case 0:
+		txSuccess = true
 		telemetry.IncrCounter(1, "daemon_sending_txs", "success")
 		telemetry.IncrCounterWithLabels([]string{"daemon_tx_gas_used_count"}, float32(txnResponse.TxResult.GasUsed), []metrics.Label{{Name: "chain_id", Value: c.cosmosCtx.ChainID}})
+	case 11:
+		// Out of gas: the cached gas estimate is stale. Invalidate it so the
+		// next tx re-simulates against current chain state.
+		invalidateGasEstimate(isBridge, msg...)
+		c.logger.Error("transaction out of gas, invalidated cached gas estimate",
+			"gasWanted", txnResponse.TxResult.GasWanted,
+			"gasUsed", txnResponse.TxResult.GasUsed,
+		)
 	}
-	// If txSuccess stays false, defer will reset commitedIds[queryMetaId]
 
 	return txnResponse, nil
 }
