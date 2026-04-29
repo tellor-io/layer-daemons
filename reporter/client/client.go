@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -20,6 +21,7 @@ import (
 	daemontypes "github.com/tellor-io/layer-daemons/types"
 	oracletypes "github.com/tellor-io/layer/x/oracle/types"
 	reportertypes "github.com/tellor-io/layer/x/reporter/types"
+	"google.golang.org/grpc"
 
 	"cosmossdk.io/log"
 	"cosmossdk.io/math"
@@ -31,7 +33,7 @@ import (
 	authtypes "github.com/cosmos/cosmos-sdk/x/auth/types"
 )
 
-const defaultGas = uint64(300000)
+const defaultGas = uint64(240000)
 
 var (
 	commitedIds   = make(map[uint64]bool)
@@ -71,10 +73,19 @@ type Client struct {
 	accAddr   sdk.AccAddress
 	minGasFee string
 	// logger is the logger for the daemon.
-	logger                 log.Logger
-	txChan                 chan TxChannelInfo
-	PriceGuard             *PriceGuard
-	lastLoggedCycleQueryID string
+	logger     log.Logger
+	txChan     chan TxChannelInfo
+	PriceGuard *PriceGuard
+	// Gas estimate refresh interval; <=0 disables periodic refresh.
+	refreshGasEstimatesInterval time.Duration
+	gasEstimator                *gasEstimateState
+
+	// Resources that need cleanup
+	grpcConn    *grpc.ClientConn
+	grpcClient  daemontypes.GrpcClient
+	wg          sync.WaitGroup
+	broadcastWg sync.WaitGroup // Tracks goroutines in BroadcastTxMsgToChain
+	stopOnce    sync.Once
 }
 
 // GetUniqueUnorderedTimeout generates a unique timeout timestamp for unordered transactions.
@@ -94,6 +105,16 @@ func NewClient(logger log.Logger, valGasMin string) *Client {
 		logger:    logger,
 		minGasFee: valGasMin,
 		txChan:    txChan,
+		gasEstimator: newGasEstimateState(map[string]gasBucketConfig{
+			bridgeGasBucketKey: {
+				levels:  []float64{1.75, 2.0},
+				baseIdx: 0,
+			},
+			defaultNonBridgeBucketConfigKey: {
+				levels:  []float64{1.25, 1.6, 2.0},
+				baseIdx: 0,
+			},
+		}),
 	}
 }
 
@@ -128,9 +149,9 @@ func (c *Client) Start(
 		return err
 	}
 	c.logger.Info("gRPC connection established successfully", "address", grpcAddress)
-	// Note: We intentionally do NOT close the connection here with defer because
-	// StartReporterDaemonTaskLoop runs indefinitely and needs the connection to stay open.
-	// The connection will be closed when the process exits.
+	// Store connection and grpcClient for cleanup
+	c.grpcConn = conn
+	c.grpcClient = grpcClient
 
 	// Initialize the query clients. These are used to query the Cosmos gRPC query services.
 	c.OracleQueryClient = oracletypes.NewQueryClient(conn)
@@ -138,9 +159,6 @@ func (c *Client) Start(
 	c.GlobalfeeClient = globalfeetypes.NewQueryClient(conn)
 	c.CmtService = cmtservice.NewServiceClient(conn)
 	c.AuthClient = authtypes.NewQueryClient(conn)
-
-	ticker := time.NewTicker(time.Millisecond * 200)
-	stop := make(chan bool)
 
 	keyName := viper.GetString("from")
 	homeDir := viper.GetString("home")
@@ -176,9 +194,7 @@ func (c *Client) Start(
 		if !viper.IsSet("price-guard-update-on-blocked") {
 			return fmt.Errorf("price-guard-enabled is true but price-guard-update-on-blocked is not set")
 		}
-	} else
-	// If price guard is disabled, error if any other price guard flags are set
-	if viper.IsSet("price-guard-threshold") || viper.IsSet("price-guard-max-age") || viper.IsSet("price-guard-update-on-blocked") {
+	} else if viper.IsSet("price-guard-threshold") || viper.IsSet("price-guard-max-age") || viper.IsSet("price-guard-update-on-blocked") {
 		return fmt.Errorf("price-guard flags are set but price-guard-enabled is false")
 	}
 
@@ -188,6 +204,7 @@ func (c *Client) Start(
 	autoUnbondingFrequency := viper.GetUint32("auto-unbonding-frequency")
 	autoUnbondingAmount := viper.GetUint32("auto-unbonding-amount")
 	autoUnbondingMaxStakePercentage := viper.GetString("auto-unbonding-max-stake-percentage")
+	c.refreshGasEstimatesInterval = viper.GetDuration("refresh-gas-estimates-interval")
 
 	if autoUnbondingFrequency > 0 {
 		if autoUnbondingAmount == 0 {
@@ -222,6 +239,11 @@ func (c *Client) Start(
 	} else {
 		c.logger.Info("Auto unbonding disabled")
 	}
+	if c.refreshGasEstimatesInterval > 0 {
+		c.logger.Info("Periodic gas estimate refresh enabled", "interval", c.refreshGasEstimatesInterval.String())
+	} else {
+		c.logger.Info("Periodic gas estimate refresh disabled")
+	}
 
 	c.cosmosCtx = c.cosmosCtx.WithChainID(chainId)
 	c.cosmosCtx = c.cosmosCtx.WithHomeDir(homeDir)
@@ -239,7 +261,7 @@ func (c *Client) Start(
 	encodingConfig := CreateEncodingConfig()
 	c.cosmosCtx = c.cosmosCtx.WithCodec(encodingConfig.Codec).WithInterfaceRegistry(encodingConfig.InterfaceRegistry).WithTxConfig(encodingConfig.TxConfig)
 
-	kr, err := keyring.New("", kb, homeDir, nil, encodingConfig.Codec)
+	kr, err := keyring.New("", kb, homeDir, os.Stdin, encodingConfig.Codec)
 	if err != nil {
 		return err
 	}
@@ -260,8 +282,7 @@ func (c *Client) Start(
 		c,
 		ctx,
 		flags,
-		ticker,
-		stop,
+		&c.wg,
 	)
 
 	return nil
@@ -271,12 +292,17 @@ func StartReporterDaemonTaskLoop(
 	client *Client,
 	ctx context.Context,
 	flags flags.DaemonFlags,
-	ticker *time.Ticker,
-	stop <-chan bool,
+	wg *sync.WaitGroup,
 ) {
 	reporterCreated := false
 	// Check if the reporter is created
 	for !reporterCreated {
+		select {
+		case <-ctx.Done():
+			client.logger.Debug("StartReporterDaemonTaskLoop: context canceled during reporter startup")
+			return
+		default:
+		}
 		reporterCreated = client.checkReporter(ctx)
 		if reporterCreated {
 			client.logger.Info("Reporter exists, setting gas price")
@@ -294,33 +320,61 @@ func StartReporterDaemonTaskLoop(
 		}
 	}
 
-	time.Sleep(5 * time.Second)
+	select {
+	case <-ctx.Done():
+		client.logger.Debug("StartReporterDaemonTaskLoop: context canceled before starting monitors")
+		return
+	case <-time.After(5 * time.Second):
+	}
 	err := client.WaitForNextBlock(ctx)
 	if err != nil {
 		client.logger.Error("Waiting for next block", "error", err)
 	}
 
-	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		client.BroadcastTxMsgToChain(ctx)
+	}()
 
 	wg.Add(1)
-	go client.BroadcastTxMsgToChain()
+	go client.MonitorCyclelistQuery(ctx, wg)
 
 	wg.Add(1)
-	go client.MonitorCyclelistQuery(ctx, &wg)
+	go client.MonitorTokenBridgeReports(ctx, wg)
 
 	wg.Add(1)
-	go client.MonitorTokenBridgeReports(ctx, &wg)
+	go client.MonitorForTippedQueries(ctx, wg)
 
 	wg.Add(1)
-	go client.MonitorForTippedQueries(ctx, &wg)
+	go client.WithdrawAndStakeEarnedRewardsPeriodically(ctx, wg)
 
 	wg.Add(1)
-	go client.WithdrawAndStakeEarnedRewardsPeriodically(ctx, &wg)
+	go client.AutoUnbondStakePeriodically(ctx, wg)
 
-	wg.Add(1)
-	go client.AutoUnbondStakePeriodically(ctx, &wg)
+	if client.refreshGasEstimatesInterval > 0 {
+		wg.Add(1)
+		go client.RefreshGasEstimatesPeriodically(ctx, wg)
+	}
 
 	wg.Wait()
+}
+
+func (c *Client) RefreshGasEstimatesPeriodically(ctx context.Context, wg *sync.WaitGroup) {
+	defer wg.Done()
+	ticker := time.NewTicker(c.refreshGasEstimatesInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			c.logger.Debug("RefreshGasEstimatesPeriodically: context canceled, exiting")
+			return
+		case <-ticker.C:
+			c.logger.Info("Refreshing gas estimate buckets to base levels")
+			c.resetAllGasLevelsToBase()
+		}
+	}
 }
 
 func (c *Client) checkReporter(ctx context.Context) bool {
@@ -385,4 +439,41 @@ func isConnectionError(err error) bool {
 		strings.Contains(errStr, "connection closed") ||
 		strings.Contains(errStr, "transport: Error while dialing") ||
 		strings.Contains(errStr, "Unavailable")
+}
+
+// trySend attempts to send to txChan but returns false if the context is canceled.
+// This prevents panics from sending on a closed channel during shutdown.
+func (c *Client) trySend(ctx context.Context, info TxChannelInfo) bool {
+	select {
+	case c.txChan <- info:
+		return true
+	case <-ctx.Done():
+		c.logger.Debug("trySend: context canceled, dropping tx")
+		return false
+	}
+}
+
+// Stop stops the reporter client gracefully
+func (c *Client) Stop() {
+	c.stopOnce.Do(func() {
+		c.logger.Debug("ReporterClient: initiating shutdown")
+
+		// Close the transaction channel to signal BroadcastTxMsgToChain to stop
+		close(c.txChan)
+
+		// Wait for all goroutines to finish
+		c.wg.Wait()
+
+		// Wait for broadcast goroutines to finish
+		c.broadcastWg.Wait()
+
+		// Close gRPC connection
+		if c.grpcConn != nil && c.grpcClient != nil {
+			if err := c.grpcClient.CloseConnection(c.grpcConn); err != nil {
+				c.logger.Error("Failed to close gRPC connection", "error", err)
+			}
+		}
+
+		c.logger.Info("ReporterClient: stopped")
+	})
 }

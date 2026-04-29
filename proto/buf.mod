@@ -1,5 +1,5 @@
 version: v1
-name: buf.build/tellor-io/layer/daemons
+name: buf.build/tellor-io/layer-daemons
 deps:
   - buf.build/googleapis/googleapis
   - buf.build/cosmos/gogo-proto

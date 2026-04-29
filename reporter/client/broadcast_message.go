@@ -13,19 +13,6 @@ import (
 	"github.com/cosmos/cosmos-sdk/telemetry"
 )
 
-// cycle list
-// const (
-// 	ethQueryData = "0x00000000000000000000000000000000000000000000000000000000000000400000000000000000000000000000000000000000000000000000000000000080000000000000000000000000000000000000000000000000000000000000000953706F745072696365000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000C0000000000000000000000000000000000000000000000000000000000000004000000000000000000000000000000000000000000000000000000000000000800000000000000000000000000000000000000000000000000000000000000003657468000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000037573640000000000000000000000000000000000000000000000000000000000"
-// 	btcQueryData = "0x00000000000000000000000000000000000000000000000000000000000000400000000000000000000000000000000000000000000000000000000000000080000000000000000000000000000000000000000000000000000000000000000953706F745072696365000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000C0000000000000000000000000000000000000000000000000000000000000004000000000000000000000000000000000000000000000000000000000000000800000000000000000000000000000000000000000000000000000000000000003627463000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000037573640000000000000000000000000000000000000000000000000000000000"
-// 	trbQueryData = "0x00000000000000000000000000000000000000000000000000000000000000400000000000000000000000000000000000000000000000000000000000000080000000000000000000000000000000000000000000000000000000000000000953706F745072696365000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000C0000000000000000000000000000000000000000000000000000000000000004000000000000000000000000000000000000000000000000000000000000000800000000000000000000000000000000000000000000000000000000000000003747262000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000037573640000000000000000000000000000000000000000000000000000000000"
-// )
-
-// var (
-// 	eth, _ = utils.QueryBytesFromString(ethQueryData)
-// 	btc, _ = utils.QueryBytesFromString(btcQueryData)
-// 	trb, _ = utils.QueryBytesFromString(trbQueryData)
-// )
-
 const (
 	bridgeDepositMaxRetries = 10 // Bridge deposits have ~1 hour window, so more retries are acceptable
 )
@@ -45,37 +32,10 @@ func (c *Client) GenerateDepositMessages(ctx context.Context) error {
 	}
 
 	telemetry.IncrCounterWithLabels([]string{"daemon_bridge_deposit", "found"}, 1, []metrics.Label{{Name: "chain_id", Value: c.cosmosCtx.ChainID}})
-	c.txChan <- TxChannelInfo{Msg: msg, isBridge: true, NumRetries: bridgeDepositMaxRetries, QueryMetaId: 0}
+	c.trySend(ctx, TxChannelInfo{Msg: msg, isBridge: true, NumRetries: bridgeDepositMaxRetries, QueryMetaId: 0})
 
 	return nil
 }
-
-// func (c *Client) generateExternalMessages(ctx context.Context, filepath string, bg *sync.WaitGroup) error {
-// 	defer bg.Done()
-// 	jsonFile, err := os.ReadFile(filepath)
-// 	if err != nil {
-// 		if errors.Is(err, os.ErrNotExist) {
-// 			return nil
-// 		}
-// 		return fmt.Errorf("error reading from file: %w", err)
-// 	}
-// 	if err := os.Remove(filepath); err != nil {
-// 		return fmt.Errorf("error deleting transactions file: %w", err)
-// 	}
-// 	tx, err := c.cosmosCtx.TxConfig.TxJSONDecoder()(jsonFile)
-// 	if err != nil {
-// 		return fmt.Errorf("error decoding json file: %w", err)
-// 	}
-// 	msgs := tx.GetMsgs()
-
-// 	resp, err := c.sendTx(ctx, msgs...)
-// 	if err != nil {
-// 		return fmt.Errorf("error sending tx: %w", err)
-// 	}
-// 	fmt.Println("response after external message", resp.TxResult.Code)
-
-// 	return nil
-// }
 
 func (c *Client) GenerateAndBroadcastSpotPriceReport(ctx context.Context, qd []byte, querymeta *oracletypes.QueryMeta) error {
 	encodedValue, rawPrice, err := c.median(qd)
@@ -125,12 +85,12 @@ func (c *Client) GenerateAndBroadcastSpotPriceReport(ctx context.Context, qd []b
 		Value:     encodedValue,
 	}
 
-	c.txChan <- TxChannelInfo{
+	c.trySend(ctx, TxChannelInfo{
 		Msg:         msg,
 		isBridge:    false,
 		NumRetries:  0,
 		QueryMetaId: querymeta.Id,
-	}
+	})
 
 	// Mark as committed immediately to prevent duplicate processing
 	mutex.Lock()
@@ -143,7 +103,7 @@ func (c *Client) GenerateAndBroadcastSpotPriceReport(ctx context.Context, qd []b
 }
 
 func (c *Client) HandleBridgeDepositTxInChannel(ctx context.Context, data TxChannelInfo) {
-	resp, err := c.sendTx(ctx, 0, data.Msg) // 0 = no queryMeta tracking for bridge transactions
+	resp, err := c.sendTx(ctx, 0, true, data.Msg) // 0 = no queryMeta tracking for bridge transactions
 	if err != nil {
 		c.logger.Error("submitting deposit report transaction",
 			"error", err,
@@ -161,7 +121,7 @@ func (c *Client) HandleBridgeDepositTxInChannel(ctx context.Context, data TxChan
 
 		// For unordered transactions, we don't need to handle concurrent transaction limits
 
-		c.txChan <- data
+		c.trySend(ctx, data)
 
 		return
 	}
@@ -192,24 +152,38 @@ func (c *Client) HandleBridgeDepositTxInChannel(ctx context.Context, data TxChan
 	c.logger.Info(fmt.Sprintf("Response from bridge tx report: %v", resp.TxResult))
 }
 
-func (c *Client) BroadcastTxMsgToChain() {
-	for obj := range c.txChan {
-		// submit transaction in goroutine without waiting for completion
-		go func(txInfo TxChannelInfo) {
-			ctx, cancel := context.WithTimeout(context.Background(), 4500*time.Millisecond)
-			defer cancel()
+func (c *Client) BroadcastTxMsgToChain(ctx context.Context) {
+	defer c.broadcastWg.Wait()
 
-			if !txInfo.isBridge {
-				_, err := c.sendTx(ctx, txInfo.QueryMetaId, txInfo.Msg)
-				if err != nil {
-					c.logger.Error(fmt.Sprintf("Error sending tx: %v", err))
-				}
-			} else {
-				c.HandleBridgeDepositTxInChannel(ctx, txInfo)
+	for {
+		select {
+		case <-ctx.Done():
+			c.logger.Debug("BroadcastTxMsgToChain: context canceled, exiting")
+			return
+		case obj, ok := <-c.txChan:
+			if !ok {
+				c.logger.Debug("BroadcastTxMsgToChain: channel closed, exiting")
+				return
 			}
-		}(obj)
+			// submit transaction in goroutine with proper tracking
+			c.broadcastWg.Add(1)
+			go func(txInfo TxChannelInfo) {
+				defer c.broadcastWg.Done()
+				txCtx, cancel := context.WithTimeout(ctx, 4500*time.Millisecond)
+				defer cancel()
 
-		// log channel status and immediately continue to next transaction
-		c.logger.Info(fmt.Sprintf("Tx in Channel: %d", len(c.txChan)))
+				if !txInfo.isBridge {
+					_, err := c.sendTx(txCtx, txInfo.QueryMetaId, false, txInfo.Msg)
+					if err != nil {
+						c.logger.Error(fmt.Sprintf("Error sending tx: %v", err))
+					}
+				} else {
+					c.HandleBridgeDepositTxInChannel(txCtx, txInfo)
+				}
+			}(obj)
+
+			// log channel status and immediately continue to next transaction
+			c.logger.Info(fmt.Sprintf("Tx in Channel: %d", len(c.txChan)))
+		}
 	}
 }

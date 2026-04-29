@@ -5,7 +5,7 @@ package daemons;
 import "gogoproto/gogo.proto";
 import "google/api/annotations.proto";
 
-option go_package = "github.com/tellor-io/layer/daemons/server/types";
+option go_package = "github.com/tellor-io/layer-daemons/server/types";
 
 // TokenBridgeService provides methods related to token bridge deposits.
 service TokenBridgeService {

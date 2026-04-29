@@ -1,8 +1,12 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"github.com/joho/godotenv"
 	"github.com/rs/zerolog"
@@ -71,8 +75,19 @@ var rootCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
-		// Pass prometheusPort to NewApp
-		daemons.NewApp(logger, chainId, grpcAddr, homePath, prometheusPort)
+		// Set up signal handling for graceful shutdown
+		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+		defer stop()
+
+		// Pass prometheusPort and signal context to NewApp
+		appInstance := daemons.NewApp(ctx, logger, chainId, grpcAddr, homePath, prometheusPort)
+
+		// Wait for signal
+		<-ctx.Done()
+		logger.Info("Received shutdown signal, shutting down gracefully...")
+
+		// Gracefully shutdown
+		appInstance.Shutdown()
 	},
 }
 
@@ -112,6 +127,7 @@ func init() {
 	rootCmd.Flags().Uint32("auto-unbonding-frequency", 0, "Enable automatic unbonding every N days (0 = disabled, 1 - 21 days = valid")
 	rootCmd.Flags().Uint32("auto-unbonding-amount", 0, "Amount of tokens in loya to unbond each unbonding transaction (0 = disabled)")
 	rootCmd.Flags().String("auto-unbonding-max-stake-percentage", "0.0", "Maximum percentage of stake to unbond each unbonding transaction (0 = disabled, 1.0 = 100%). If unbonding amount exceeds this percentage, we will skip the unbonding transaction until it exceeds this percentage again.")
+	rootCmd.Flags().Duration("refresh-gas-estimates-interval", 12*time.Hour, "Interval for resetting cached gas estimates and gas-adjustment levels (<=0 disables)")
 
 	// Marking required flags
 	if err := rootCmd.MarkFlagRequired(flags.FlagHome); err != nil {
@@ -120,10 +136,9 @@ func init() {
 	// Note: --from, --grpc, --chain-id, and --node are only required in normal mode, not test mode
 	// We'll validate them in the Run function instead
 
-	// Try to load .env from current directory, or parent directory if not found
-	// .env file is optional, so we ignore errors - allows daemon to run without .env
+	// Try to load .env from current directory, or parent directory if not found.
+	// .env file is optional — allows the daemon to run without one if env vars are set another way.
 	if err := godotenv.Load(); err != nil {
-		// Try parent directory (for when running from daemons/ subdirectory)
 		_ = godotenv.Load("../.env")
 	}
 
