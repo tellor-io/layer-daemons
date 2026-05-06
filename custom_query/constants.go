@@ -317,6 +317,14 @@ var StaticQueriesConfig = map[string]*QueryConfig{
 		ResponseType:      "ufixed256x18",
 		Endpoints: []EndpointConfig{
 			{
+				EndpointType: "blocksize",
+				ResponsePath: []string{"result", "vwap", "price"},
+				Params: map[string]string{
+					"ticker": "KINGUSD",
+				},
+				MarketId: "KING-USD",
+			},
+			{
 				EndpointType: "coingecko",
 				ResponsePath: []string{"lrt-squared", "usd"},
 				Params: map[string]string{
