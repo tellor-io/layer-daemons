@@ -177,7 +177,7 @@ var StaticQueriesConfig = map[string]*QueryConfig{
 				EndpointType: "blocksize",
 				ResponsePath: []string{"result", "vwap", "price"},
 				Params: map[string]string{
-					"ticker": "SUSDUSD",
+					"ticker": "SUSDSUSD",
 				},
 				MarketId: "SUSDS-USD",
 			},
