@@ -39,7 +39,5 @@ func (s *SUSDSHandler) FetchValue(
 
 	value, _ := usdValue.Float64()
 
-	fmt.Println("sUSDS Price (USD):", value)
-
 	return value, nil
 }

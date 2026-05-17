@@ -204,13 +204,10 @@ func MedianInHex(values []float64, responseType string, maxSpreadPercent float64
 	if len(values)%2 == 1 {
 		// For odd number of values, take the middle value
 		medianValue = values[middle]
-		fmt.Println("Odd count, middle index:", middle, "value:", medianValue)
 	} else {
 		// For even number of values use the average of the two middle values
 		medianValue = (values[middle-1] + values[middle]) / 2.0
 	}
-
-	fmt.Println("Final Median Value:", medianValue)
 
 	// Convert median to 32-byte hex string
 	return AbiNumberEncoder(medianValue, responseType)

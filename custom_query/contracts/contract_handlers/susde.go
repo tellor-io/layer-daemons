@@ -64,7 +64,6 @@ func (r *SUSDEUSD) FetchValue(
 	finalResult := new(big.Float).Quo(valueFloat, divisorFloat)
 
 	finalValue, _ := finalResult.Float64()
-	fmt.Printf("SUSDE Price (USD): $%.2f\n", finalValue)
 
 	return finalValue, nil
 }

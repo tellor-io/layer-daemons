@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"math/big"
 	"time"
 
 	log "github.com/sirupsen/logrus"
+	"github.com/tellor-io/layer-daemons/constants"
 	contract_handlers "github.com/tellor-io/layer-daemons/custom_query/contracts/contract_handlers"
 	contractreader "github.com/tellor-io/layer-daemons/custom_query/contracts/contract_reader"
 	rpcreader "github.com/tellor-io/layer-daemons/custom_query/rpc/rpc_reader"
@@ -27,6 +29,7 @@ func (h *SFRXUSDPriceHandler) FetchValue(
 	contractReaders map[string]*contractreader.Reader,
 	rpcReaders map[string]*rpcreader.Reader,
 	priceCache *pricefeedservertypes.MarketToExchangePrices,
+	config map[string]any,
 	minResponses int,
 	maxSpreadPercent float64,
 	maxDataAge time.Duration,
@@ -58,7 +61,7 @@ func (h *SFRXUSDPriceHandler) FetchValue(
 	}
 	if reader, exists := rpcReaders["curve"]; exists {
 		fetcher.FetchRPC(ctx, "frx_curve", reader)
-	} else {
+	} else if config["curve_cache_market_id"] == nil {
 		log.Warn("[sFRXUSD] Curve reader not available")
 	}
 	if reader, exists := rpcReaders["coinpaprika"]; exists {
@@ -114,24 +117,32 @@ func (h *SFRXUSDPriceHandler) FetchValue(
 		log.Warnf("[sFRXUSD] Failed to fetch CoinGecko data: %v", err)
 	}
 
-	// Parse Curve response
-	if result, err := fetcher.GetBytes("frx_curve"); err == nil {
-		var curveResponse struct {
-			Data struct {
-				UsdPrice float64 `json:"usd_price"`
-			} `json:"data"`
-		}
-		if err := json.Unmarshal(result, &curveResponse); err == nil {
-			if curveResponse.Data.UsdPrice > 0 {
-				frxPrices = append(frxPrices, curveResponse.Data.UsdPrice)
+	// Parse Curve response when configured as a live RPC source.
+	if _, exists := rpcReaders["curve"]; exists {
+		if result, err := fetcher.GetBytes("frx_curve"); err == nil {
+			var curveResponse struct {
+				Data struct {
+					UsdPrice float64 `json:"usd_price"`
+				} `json:"data"`
+			}
+			if err := json.Unmarshal(result, &curveResponse); err == nil {
+				if curveResponse.Data.UsdPrice > 0 {
+					frxPrices = append(frxPrices, curveResponse.Data.UsdPrice)
+				} else {
+					log.Warn("[sFRXUSD] Curve response has zero or missing price")
+				}
 			} else {
-				log.Warn("[sFRXUSD] Curve response has zero or missing price")
+				log.Warnf("[sFRXUSD] Failed to parse Curve JSON: %v", err)
 			}
 		} else {
-			log.Warnf("[sFRXUSD] Failed to parse Curve JSON: %v", err)
+			log.Warnf("[sFRXUSD] Failed to fetch Curve data: %v", err)
 		}
-	} else {
-		log.Warnf("[sFRXUSD] Failed to fetch Curve data: %v", err)
+	}
+
+	if price, err := cachedCurvePrice(priceCache, config); err == nil {
+		frxPrices = append(frxPrices, price)
+	} else if config["curve_cache_market_id"] != nil {
+		log.Warnf("[sFRXUSD] Failed to read cached Curve price: %v", err)
 	}
 
 	// Parse CoinPaprika response
@@ -194,4 +205,61 @@ func (h *SFRXUSDPriceHandler) FetchValue(
 	result := fundamentalRateFloat * medianFrxUsdPrice
 
 	return result, nil
+}
+
+func cachedCurvePrice(
+	priceCache *pricefeedservertypes.MarketToExchangePrices,
+	config map[string]any,
+) (float64, error) {
+	if priceCache == nil {
+		return 0, fmt.Errorf("price cache is nil")
+	}
+
+	cacheMarketId, ok := uint32ConfigValue(config["curve_cache_market_id"])
+	if !ok || cacheMarketId == 0 {
+		return 0, fmt.Errorf("curve_cache_market_id is not configured")
+	}
+
+	exchangeId, ok := config["curve_cache_exchange_id"].(string)
+	if !ok || exchangeId == "" {
+		return 0, fmt.Errorf("curve_cache_exchange_id is not configured")
+	}
+
+	marketParam, found := constants.StaticMarketParamsConfig[cacheMarketId]
+	if !found {
+		return 0, fmt.Errorf("market param not found for cache market ID %d", cacheMarketId)
+	}
+
+	rawPrice, found := priceCache.GetValidExchangePrice(cacheMarketId, exchangeId, time.Now())
+	if !found {
+		return 0, fmt.Errorf("no valid cached price found for market ID %d on exchange %s", cacheMarketId, exchangeId)
+	}
+
+	return float64(rawPrice) * math.Pow10(int(marketParam.Exponent)), nil
+}
+
+func uint32ConfigValue(v any) (uint32, bool) {
+	switch typed := v.(type) {
+	case uint32:
+		return typed, true
+	case uint64:
+		return uint32(typed), true
+	case int:
+		if typed < 0 {
+			return 0, false
+		}
+		return uint32(typed), true
+	case int64:
+		if typed < 0 {
+			return 0, false
+		}
+		return uint32(typed), true
+	case float64:
+		if typed < 0 {
+			return 0, false
+		}
+		return uint32(typed), true
+	default:
+		return 0, false
+	}
 }

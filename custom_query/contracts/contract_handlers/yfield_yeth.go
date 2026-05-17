@@ -66,7 +66,6 @@ func (r *YieldFiYeth) FetchValue(
 	finalResult := new(big.Float).Quo(valueFloat, divisorFloat)
 
 	finalValue, _ := finalResult.Float64()
-	fmt.Printf("YieldFi-yETH Price (USD): $%.2f\n", finalValue)
 
 	return finalValue, nil
 }

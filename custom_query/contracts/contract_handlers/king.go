@@ -28,9 +28,6 @@ func (r *KingHandler) FetchValue(
 		return 0, fmt.Errorf("king: %w", err)
 	}
 
-	fmt.Printf("Result length: %d bytes\n", len(result))
-	fmt.Printf("Raw result hex: 0x%x\n", result)
-
 	if len(result) < 64 {
 		return 0, fmt.Errorf("unexpected result length: got %d bytes, expected 64 bytes for two uint256 values", len(result))
 	}
@@ -46,6 +43,5 @@ func (r *KingHandler) FetchValue(
 	usdValue := new(big.Float).Quo(valueInUsdFloat, divisorFloat)
 
 	value, _ := usdValue.Float64()
-	fmt.Printf("Value in USD: $%f\n", value)
 	return value, nil
 }

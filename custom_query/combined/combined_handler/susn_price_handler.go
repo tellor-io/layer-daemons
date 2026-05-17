@@ -27,6 +27,7 @@ func (h *SUSNPriceHandler) FetchValue(
 	contractReaders map[string]*contractreader.Reader,
 	rpcReaders map[string]*rpcreader.Reader,
 	_ *pricefeedservertypes.MarketToExchangePrices,
+	_ map[string]any,
 	minResponses int,
 	maxSpreadPercent float64,
 	maxDataAge time.Duration,
@@ -81,13 +82,11 @@ func (h *SUSNPriceHandler) FetchValue(
 	for name, reader := range rpcReaders {
 		priceBytes, err := fetcher.GetBytes("price_" + name)
 		if err != nil {
-			fmt.Printf("Warning: failed to get price from %s: %v\n", name, err)
 			continue
 		}
 
 		price, err := h.extractPrice(priceBytes, reader.ResponsePath)
 		if err != nil {
-			fmt.Printf("Warning: failed to extract price from %s: %v\n", name, err)
 			continue
 		}
 
@@ -122,8 +121,6 @@ func (h *SUSNPriceHandler) FetchValue(
 
 	// Multiply conversion rate by median price
 	result := conversionRateFloat * medianPrice
-
-	fmt.Printf("SUSN Price: conversion_rate=%f, median_price=%f, final=%f\n", conversionRateFloat, medianPrice, result)
 
 	return result, nil
 }

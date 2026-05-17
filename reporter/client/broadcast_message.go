@@ -38,7 +38,7 @@ func (c *Client) GenerateDepositMessages(ctx context.Context) error {
 }
 
 func (c *Client) GenerateAndBroadcastSpotPriceReport(ctx context.Context, qd []byte, querymeta *oracletypes.QueryMeta) error {
-	encodedValue, rawPrice, err := c.median(qd)
+	encodedValue, rawPrice, err := c.median(ctx, qd)
 	if err != nil {
 		return fmt.Errorf("error getting median from median client': %w", err)
 	}

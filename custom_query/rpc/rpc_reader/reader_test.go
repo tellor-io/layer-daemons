@@ -58,7 +58,7 @@ func TestFetchJSON(t *testing.T) {
 
 	// Create reader with test server URL
 	headers := map[string]string{"X-Test-Header": "test-value"}
-	reader, err := NewReader(server.URL, "GET", "", headers, []string{"pool", "current_sqrt_price"}, 5, nil)
+	reader, err := NewReader(server.URL, "GET", "", headers, []string{"pool", "current_sqrt_price"}, 5000, nil)
 	if err != nil {
 		t.Fatalf("Failed to create reader: %v", err)
 	}
@@ -143,7 +143,7 @@ func TestRetryLogic(t *testing.T) {
 	defer server.Close()
 
 	// Create reader
-	reader, err := NewReader(server.URL, "GET", "", nil, nil, 5, nil)
+	reader, err := NewReader(server.URL, "GET", "", nil, nil, 500, nil)
 	if err != nil {
 		t.Fatalf("Failed to create reader: %v", err)
 	}
@@ -169,13 +169,13 @@ func TestRetryLogic(t *testing.T) {
 func TestTimeout(t *testing.T) {
 	// Create test server that delays response
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(2 * time.Second)
+		time.Sleep(200 * time.Millisecond)
 		require.NoError(t, json.NewEncoder(w).Encode(map[string]string{"status": "ok"}))
 	}))
 	defer server.Close()
 
-	// Create reader with 1 second timeout
-	reader, err := NewReader(server.URL, "GET", "", nil, nil, 1, nil)
+	// Create reader with a 10ms timeout
+	reader, err := NewReader(server.URL, "GET", "", nil, nil, 10, nil)
 	if err != nil {
 		t.Fatalf("Failed to create reader: %v", err)
 	}
@@ -186,4 +186,21 @@ func TestTimeout(t *testing.T) {
 	if err == nil {
 		t.Fatal("Expected timeout error")
 	}
+}
+
+func TestFetchJSONDoesNotRetryPermanent4xx(t *testing.T) {
+	attempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	reader, err := NewReader(server.URL, http.MethodGet, "", nil, nil, 500, nil)
+	require.NoError(t, err)
+
+	_, err = reader.FetchJSON(context.Background())
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "received non-OK response code: 404")
+	require.Equal(t, 1, attempts)
 }

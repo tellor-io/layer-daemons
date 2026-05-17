@@ -119,7 +119,7 @@ func fundamentalFeedComment(q *QueryConfig, pair, collateral string) string {
 func countCombinedRPCSources(ep EndpointConfig) int {
 	n := 0
 	for _, sourceType := range ep.CombinedSources {
-		if strings.HasPrefix(sourceType, "rpc:") {
+		if strings.HasPrefix(sourceType, "rpc:") || strings.HasPrefix(sourceType, "cache:") {
 			n++
 		}
 	}

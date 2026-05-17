@@ -3,6 +3,7 @@ package rpc_reader
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -32,6 +33,14 @@ type httpClient struct {
 	method  string
 }
 
+type statusCodeError struct {
+	code int
+}
+
+func (e statusCodeError) Error() string {
+	return fmt.Sprintf("received non-OK response code: %d", e.code)
+}
+
 func NewReader(url, method, query string, headers map[string]string, responsePath []string, timeout int, params map[string]string) (*Reader, error) {
 	if url == "" {
 		return nil, fmt.Errorf("no RPC endpoint provided")
@@ -39,7 +48,7 @@ func NewReader(url, method, query string, headers map[string]string, responsePat
 
 	client := &httpClient{
 		client: &http.Client{
-			Timeout: time.Duration(timeout) * time.Second,
+			Timeout: time.Duration(timeout) * time.Millisecond,
 		},
 		baseURL: url,
 		method:  method,
@@ -101,6 +110,9 @@ func (r *Reader) FetchJSON(ctx context.Context) ([]byte, error) {
 
 		lastErr = err
 		log.Warnf("Request failed (attempt %d/%d): %v", retry+1, r.maxRetries+1, err)
+		if !shouldRetry(ctx, err) {
+			return nil, fmt.Errorf("all RPC endpoints failed: %w", lastErr)
+		}
 	}
 
 	metrics.RPCCallErrors.Inc()
@@ -132,7 +144,7 @@ func (r *Reader) attemptFetch(ctx context.Context, method string) ([]byte, error
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("received non-OK response code: %d", resp.StatusCode)
+		return nil, statusCodeError{code: resp.StatusCode}
 	}
 
 	body, err := io.ReadAll(resp.Body)
@@ -142,6 +154,31 @@ func (r *Reader) attemptFetch(ctx context.Context, method string) ([]byte, error
 	}
 
 	return body, nil
+}
+
+func shouldRetry(ctx context.Context, err error) bool {
+	if err == nil {
+		return false
+	}
+	if ctx.Err() != nil || errors.Is(err, context.Canceled) {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+
+	var statusErr statusCodeError
+	if errors.As(err, &statusErr) {
+		if statusErr.code == http.StatusTooManyRequests {
+			return true
+		}
+		if statusErr.code >= http.StatusInternalServerError {
+			return true
+		}
+		return false
+	}
+
+	return true
 }
 
 func (r *Reader) ExtractValueFromJSON(data []byte, path []string) (any, error) {

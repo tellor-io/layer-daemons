@@ -128,6 +128,16 @@ func TestStaticExchangeQueryConfigCache(t *testing.T) {
 			},
 			expectedFound: true,
 		},
+		"Get Curve exchangeDetails": {
+			exchangeId: exchange_common.EXCHANGE_ID_CURVE,
+			expectedValue: &types.ExchangeQueryConfig{
+				ExchangeId: exchange_common.EXCHANGE_ID_CURVE,
+				IntervalMs: 20_000,
+				TimeoutMs:  3_000,
+				MaxQueries: 3,
+			},
+			expectedFound: true,
+		},
 		"Get unknown exchangeDetails": {
 			exchangeId:    "unknown",
 			expectedFound: false,
@@ -144,5 +154,5 @@ func TestStaticExchangeQueryConfigCache(t *testing.T) {
 }
 
 func TestStaticExchangeQueryConfigCacheLength(t *testing.T) {
-	require.Len(t, constants.StaticExchangeQueryConfig, 14)
+	require.Len(t, constants.StaticExchangeQueryConfig, 15)
 }

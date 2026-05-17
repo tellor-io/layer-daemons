@@ -2,9 +2,12 @@ package price_fetcher
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/rand"
+	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	gometrics "github.com/hashicorp/go-metrics"
@@ -12,6 +15,7 @@ import (
 	"github.com/tellor-io/layer-daemons/lib"
 	"github.com/tellor-io/layer-daemons/lib/metrics"
 	handler "github.com/tellor-io/layer-daemons/pricefeed/client/queryhandler"
+	price_function "github.com/tellor-io/layer-daemons/pricefeed/client/sources"
 	"github.com/tellor-io/layer-daemons/pricefeed/client/types"
 	pricefeedmetrics "github.com/tellor-io/layer-daemons/pricefeed/metrics"
 	daemontypes "github.com/tellor-io/layer-daemons/types"
@@ -41,6 +45,11 @@ type PriceFetcher struct {
 	// mutableState contains all mutable state on the price fetcher is consolidated into a single object with access
 	// and update protected by a mutex.
 	mutableState *mutableState
+
+	backoffMu           sync.Mutex
+	consecutiveFailures int
+	backoffUntil        time.Time
+	lastBackoffReason   string
 }
 
 // NewPriceFetcher creates a new PriceFetcher struct. It manages querying markets via goroutine
@@ -156,10 +165,102 @@ func (p *PriceFetcher) getNumQueriesPerTaskLoop() int {
 	)
 }
 
+func (p *PriceFetcher) shouldSkipForBackoff() bool {
+	p.backoffMu.Lock()
+	defer p.backoffMu.Unlock()
+
+	if p.backoffUntil.IsZero() || time.Now().After(p.backoffUntil) {
+		return false
+	}
+
+	p.logger.Debug(
+		"price_fetcher: skipping query while exchange is in backoff",
+		constants.ReasonLogKey,
+		p.lastBackoffReason,
+		"backoffUntil",
+		p.backoffUntil,
+	)
+	telemetry.IncrCounterWithLabels(
+		[]string{metrics.PricefeedDaemon, metrics.PriceFetcherQueryExchange, "backoff"},
+		1,
+		[]gometrics.Label{
+			pricefeedmetrics.GetLabelForExchangeId(p.GetExchangeId()),
+			metrics.GetLabelForStringValue(metrics.Reason, p.lastBackoffReason),
+		},
+	)
+	return true
+}
+
+func (p *PriceFetcher) observeQuerySuccess() {
+	p.backoffMu.Lock()
+	defer p.backoffMu.Unlock()
+
+	p.consecutiveFailures = 0
+	p.backoffUntil = time.Time{}
+	p.lastBackoffReason = ""
+}
+
+func (p *PriceFetcher) observeQueryFailure(err error) {
+	reason, ok := transientBackoffReason(err)
+	if !ok {
+		return
+	}
+
+	p.backoffMu.Lock()
+	defer p.backoffMu.Unlock()
+
+	p.consecutiveFailures++
+	baseDelay := time.Duration(p.exchangeQueryConfig.IntervalMs) * time.Millisecond
+	if baseDelay <= 0 {
+		baseDelay = time.Second
+	}
+	if reason == metrics.RateLimit {
+		baseDelay *= 4
+	} else {
+		baseDelay *= 2
+	}
+
+	multiplier := 1 << min(p.consecutiveFailures-1, 5)
+	delay := time.Duration(multiplier) * baseDelay
+	if delay > time.Minute {
+		delay = time.Minute
+	}
+	jitterCap := baseDelay / 4
+	if jitterCap > 0 {
+		delay += time.Duration(rand.Int63n(int64(jitterCap)))
+	}
+
+	p.backoffUntil = time.Now().Add(delay)
+	p.lastBackoffReason = reason
+}
+
+func transientBackoffReason(err error) (string, bool) {
+	switch {
+	case err == nil:
+		return "", false
+	case errors.Is(err, constants.ErrRateLimiting):
+		return metrics.RateLimit, true
+	case errors.Is(err, context.DeadlineExceeded):
+		return metrics.HttpGetTimeout, true
+	case errors.Is(err, syscall.ECONNRESET):
+		return metrics.HttpGetHangup, true
+	case price_function.IsGenericExchangeError(err):
+		return metrics.HttpGet5xx, true
+	case strings.Contains(strings.ToLower(err.Error()), "too many requests"):
+		return metrics.RateLimit, true
+	default:
+		return "", false
+	}
+}
+
 // RunTaskLoop queries the exchange for market prices.
 // Each goroutine makes a single exchange query for a specific set of one or more markets.
 // RunTaskLoop blocks until all spawned goroutines have completed.
 func (pf *PriceFetcher) RunTaskLoop(requestHandler daemontypes.RequestHandler) {
+	if pf.shouldSkipForBackoff() {
+		return
+	}
+
 	taskLoopDefinition := pf.getTaskLoopDefinition()
 
 	if pf.isMultiMarketAndHasMarkets() {
@@ -266,6 +367,7 @@ func (pf *PriceFetcher) runSubTask(
 	emitMetricsSample := rand.Float64() < metrics.AvailableMarketsSampleRate
 
 	if err != nil {
+		pf.observeQueryFailure(err)
 		pf.writeToBufferedChannel(exchangeId, nil, err)
 
 		// Since the query failed, report all markets as unavailable, according to the sampling rate.
@@ -277,6 +379,7 @@ func (pf *PriceFetcher) runSubTask(
 
 		return
 	}
+	pf.observeQuerySuccess()
 
 	// Track which markets were available when queried, and which were not, for telemetry.
 	availableMarkets := make(map[types.MarketId]bool, len(marketIds))

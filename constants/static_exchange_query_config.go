@@ -16,6 +16,7 @@ const (
 	defaultTimeoutMs             = 3_000
 	defaultMaxQueries            = 3
 	defaultMultiMarketMaxQueries = 1
+	curveIntervalMs              = 20_000
 )
 
 var StaticExchangeQueryConfig = map[types.ExchangeId]*types.ExchangeQueryConfig{
@@ -126,6 +127,14 @@ var StaticExchangeQueryConfig = map[types.ExchangeId]*types.ExchangeQueryConfig{
 		IntervalMs: defaultIntervalMs,
 		TimeoutMs:  defaultTimeoutMs,
 		MaxQueries: defaultMultiMarketMaxQueries,
+	},
+	// Curve's price API is used as a cached custom-query source. Poll slowly
+	// and rotate all configured Curve markets each task loop to avoid report-time bursts.
+	exchange_common.EXCHANGE_ID_CURVE: {
+		ExchangeId: exchange_common.EXCHANGE_ID_CURVE,
+		IntervalMs: curveIntervalMs,
+		TimeoutMs:  defaultTimeoutMs,
+		MaxQueries: defaultMaxQueries,
 	},
 	exchange_common.EXCHANGE_ID_TEST_VOLATILE_EXCHANGE: {
 		ExchangeId: exchange_common.EXCHANGE_ID_TEST_VOLATILE_EXCHANGE,

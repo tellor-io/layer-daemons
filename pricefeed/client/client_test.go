@@ -303,11 +303,13 @@ func TestStop(t *testing.T) {
 
 	// Start gRPC server with cleanup.
 	defer grpcServer.Stop()
+	ls, err := net.Listen("tcp", appFlags.GrpcAddress)
+	require.NoError(t, err)
 	go func() {
-		ls, err := net.Listen("tcp", appFlags.GrpcAddress)
-		require.NoError(t, err)
 		err = grpcServer.Serve(ls)
-		require.NoError(t, err)
+		if err != nil && err != grpc.ErrServerStopped {
+			panic(err)
+		}
 	}()
 
 	client := StartNewClient(

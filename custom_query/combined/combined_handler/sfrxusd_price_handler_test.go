@@ -83,7 +83,7 @@ func TestSFRXUSDHandler_Success(t *testing.T) {
 	handler := &SFRXUSDPriceHandler{}
 	ctx := context.Background()
 
-	price, err := handler.FetchValue(ctx, contractReaders, rpcReaders, priceCache, 2, 50.0, 0)
+	price, err := handler.FetchValue(ctx, contractReaders, rpcReaders, priceCache, nil, 2, 50.0, 0)
 
 	require.NoError(t, err)
 	assert.InDelta(t, 1.05*1.02, price, 1e-9)
@@ -94,7 +94,7 @@ func TestSFRXUSDHandler_MissingContractReader(t *testing.T) {
 	handler := &SFRXUSDPriceHandler{}
 	ctx := context.Background()
 
-	_, err := handler.FetchValue(ctx, map[string]*contractreader.Reader{}, make(map[string]*rpcreader.Reader), priceCache, 2, 50.0, 0)
+	_, err := handler.FetchValue(ctx, map[string]*contractreader.Reader{}, make(map[string]*rpcreader.Reader), priceCache, nil, 2, 50.0, 0)
 
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "ethereum contract reader not found")
@@ -113,7 +113,7 @@ func TestSFRXUSDHandler_ZeroPricePerShare(t *testing.T) {
 	handler := &SFRXUSDPriceHandler{}
 	ctx := context.Background()
 
-	_, err = handler.FetchValue(ctx, map[string]*contractreader.Reader{"ethereum": contractReader}, make(map[string]*rpcreader.Reader), priceCache, 2, 50.0, 0)
+	_, err = handler.FetchValue(ctx, map[string]*contractreader.Reader{"ethereum": contractReader}, make(map[string]*rpcreader.Reader), priceCache, nil, 2, 50.0, 0)
 
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid pricePerShare: zero")
@@ -147,7 +147,7 @@ func TestSFRXUSDHandler_InsufficientSources(t *testing.T) {
 	handler := &SFRXUSDPriceHandler{}
 	ctx := context.Background()
 
-	_, err = handler.FetchValue(ctx, map[string]*contractreader.Reader{"ethereum": contractReader}, map[string]*rpcreader.Reader{"coingecko": coingeckoReader}, priceCache, 2, 50.0, 0)
+	_, err = handler.FetchValue(ctx, map[string]*contractreader.Reader{"ethereum": contractReader}, map[string]*rpcreader.Reader{"coingecko": coingeckoReader}, priceCache, nil, 2, 50.0, 0)
 
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "insufficient FRX/USD prices")

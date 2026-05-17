@@ -1,13 +1,16 @@
 package price_fetcher
 
 import (
+	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	pricefeed_cosntants "github.com/tellor-io/layer-daemons/constants"
 	"github.com/tellor-io/layer-daemons/lib"
+	"github.com/tellor-io/layer-daemons/lib/metrics"
 	"github.com/tellor-io/layer-daemons/mocks"
 	"github.com/tellor-io/layer-daemons/pricefeed/client/types"
 	"github.com/tellor-io/layer-daemons/testutil/constants"
@@ -26,6 +29,31 @@ var (
 	errexchangeQueryHandlerFailure = errors.New("failed to query exchange")
 	errtickerNotAvailable          = errors.New("ticker not listed")
 )
+
+func TestPriceFetcherBacksOffAndRecovers(t *testing.T) {
+	pf := &PriceFetcher{
+		exchangeQueryConfig: types.ExchangeQueryConfig{
+			ExchangeId: "Exchange1",
+			IntervalMs: 10,
+		},
+		logger: log.NewNopLogger(),
+	}
+
+	require.False(t, pf.shouldSkipForBackoff())
+
+	pf.observeQueryFailure(pricefeed_cosntants.ErrRateLimiting)
+	require.True(t, pf.shouldSkipForBackoff())
+	require.Equal(t, 1, pf.consecutiveFailures)
+	require.Equal(t, metrics.RateLimit, pf.lastBackoffReason)
+	require.True(t, pf.backoffUntil.After(time.Now()))
+
+	pf.observeQuerySuccess()
+	require.False(t, pf.shouldSkipForBackoff())
+	require.Equal(t, 0, pf.consecutiveFailures)
+
+	pf.observeQueryFailure(context.DeadlineExceeded)
+	require.True(t, pf.shouldSkipForBackoff())
+}
 
 // TestRunTaskLoop tests that different exchange configurations results in the expected queries being made, and prices
 // produced.

@@ -10,6 +10,7 @@ import (
 	"github.com/tellor-io/layer-daemons/pricefeed/client/sources/bitfinex"
 	"github.com/tellor-io/layer-daemons/pricefeed/client/sources/bitstamp"
 	"github.com/tellor-io/layer-daemons/pricefeed/client/sources/crypto_com"
+	"github.com/tellor-io/layer-daemons/pricefeed/client/sources/curve"
 	"github.com/tellor-io/layer-daemons/pricefeed/client/sources/gate"
 	"github.com/tellor-io/layer-daemons/pricefeed/client/sources/huobi"
 	"github.com/tellor-io/layer-daemons/pricefeed/client/sources/kraken"
@@ -82,6 +83,11 @@ func TestStaticExchangeDetailsCache(t *testing.T) {
 		"Get Mexc exchangeDetails": {
 			exchangeId:    exchange_common.EXCHANGE_ID_MEXC,
 			expectedValue: mexc.MexcDetails,
+			expectedFound: true,
+		},
+		"Get Curve exchangeDetails": {
+			exchangeId:    exchange_common.EXCHANGE_ID_CURVE,
+			expectedValue: curve.CurveDetails,
 			expectedFound: true,
 		},
 		"Get test exchange exchangeDetails": {

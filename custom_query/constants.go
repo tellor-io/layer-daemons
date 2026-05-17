@@ -147,12 +147,10 @@ var StaticQueriesConfig = map[string]*QueryConfig{
 				MarketId: "SDAI-USD",
 			},
 			{
-				EndpointType: "curve",
-				ResponsePath: []string{"data", "usd_price"},
-				Params: map[string]string{
-					"contract_address": "0x83F20F44975D03b1b09e64809B757c47f942BEeA",
-				},
-				MarketId: "SDAI-USD",
+				EndpointType:  "market_cache",
+				MarketId:      "SDAI-USD",
+				CacheMarketId: exchange_common.SDAIUSD_ID,
+				ExchangeId:    string(exchange_common.EXCHANGE_ID_CURVE),
 			},
 		},
 	},
@@ -220,12 +218,10 @@ var StaticQueriesConfig = map[string]*QueryConfig{
 				MarketId: "SUSDS-USD",
 			},
 			{
-				EndpointType: "curve",
-				ResponsePath: []string{"data", "usd_price"},
-				Params: map[string]string{
-					"contract_address": "0xa3931d71877c0e7a3148cb7eb4463524fec27fbd",
-				},
-				MarketId: "SUSDS-USD",
+				EndpointType:  "market_cache",
+				MarketId:      "SUSDS-USD",
+				CacheMarketId: exchange_common.SUSDSUSD_ID,
+				ExchangeId:    string(exchange_common.EXCHANGE_ID_CURVE),
 			},
 		},
 	},
@@ -460,7 +456,7 @@ var StaticQueriesConfig = map[string]*QueryConfig{
 				CombinedSources: map[string]string{
 					"ethereum":    "contract:ethereum",
 					"coingecko":   "rpc:coingecko",
-					"curve":       "rpc:curve",
+					"curve":       "cache:curve",
 					"coinpaprika": "rpc:coinpaprika",
 				},
 				CombinedConfig: map[string]any{
@@ -470,10 +466,8 @@ var StaticQueriesConfig = map[string]*QueryConfig{
 						"coin_id": "frax",
 					},
 					"coingecko_response_path": []string{"frax", "usd"},
-					"curve_params": map[string]any{
-						"contract_address": "0x853d955aCEf822Db058eb8505911ED77F175b99e",
-					},
-					"curve_response_path": []string{"data", "usd_price"},
+					"curve_cache_market_id":   exchange_common.FRXUSD_ID,
+					"curve_cache_exchange_id": string(exchange_common.EXCHANGE_ID_CURVE),
 					"coinpaprika_params": map[string]any{
 						"coin_id": "frax-frax",
 					},

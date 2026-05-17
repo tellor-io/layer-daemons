@@ -76,6 +76,12 @@ const (
 		{{- if $endpoint.MaxDataAgeSecs }}
 		max_data_age_seconds = {{ $endpoint.MaxDataAgeSecs }}
 		{{- end }}
+		{{- if $endpoint.CacheMarketId }}
+		cache_market_id = {{ $endpoint.CacheMarketId }}
+		{{- end }}
+		{{- if $endpoint.ExchangeId }}
+		exchange_id = "{{ $endpoint.ExchangeId }}"
+		{{- end }}
 		{{- if $endpoint.CombinedSources }}
 		combined_sources = { {{ formatCombinedSources $endpoint.CombinedSources }} }
 		{{- end }}

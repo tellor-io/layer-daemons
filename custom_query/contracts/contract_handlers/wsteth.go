@@ -54,7 +54,5 @@ func (s *WSTETHHandler) FetchValue(
 	scaleFactor := math.Pow(10, float64(stEthUsdMarketParam.Exponent)) // exponent is negative
 	valueFloat := float64(value.Uint64()) * scaleFactor
 
-	fmt.Printf("wstETH Price: $%.2f USD\n", valueFloat)
-
 	return valueFloat, nil
 }

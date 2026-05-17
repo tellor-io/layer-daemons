@@ -13,8 +13,9 @@ import (
 )
 
 const (
-	endpointTypeCombined = "combined"
-	endpointTypeContract = "contract"
+	endpointTypeCombined    = "combined"
+	endpointTypeContract    = "contract"
+	endpointTypeMarketCache = "market_cache"
 )
 
 type EndpointTemplate struct {
@@ -56,6 +57,13 @@ type RpcHandler struct {
 	MaxDataAge time.Duration
 }
 
+type MarketCacheHandler struct {
+	EndpointID    string
+	MarketId      string
+	CacheMarketId uint32
+	ExchangeId    string
+}
+
 type CombinedHandler struct {
 	Handler          string
 	ContractReaders  map[string]*contractreader.Reader
@@ -66,15 +74,16 @@ type CombinedHandler struct {
 	MaxDataAge       time.Duration
 }
 type QueryConfig struct {
-	ID                string            `toml:"id"`
-	AggregationMethod string            `toml:"aggregation_method"`
-	MinResponses      int               `toml:"min_responses"`
-	ResponseType      string            `toml:"response_type"`
-	MaxSpreadPercent  float64           `toml:"max_spread_percent"`
-	Endpoints         []EndpointConfig  `toml:"endpoints"`
-	ContractReaders   []ContractHandler `toml:"-"`
-	RpcReaders        []RpcHandler      `toml:"-"`
-	CombinedReaders   []CombinedHandler `toml:"-"`
+	ID                 string               `toml:"id"`
+	AggregationMethod  string               `toml:"aggregation_method"`
+	MinResponses       int                  `toml:"min_responses"`
+	ResponseType       string               `toml:"response_type"`
+	MaxSpreadPercent   float64              `toml:"max_spread_percent"`
+	Endpoints          []EndpointConfig     `toml:"endpoints"`
+	ContractReaders    []ContractHandler    `toml:"-"`
+	RpcReaders         []RpcHandler         `toml:"-"`
+	MarketCacheReaders []MarketCacheHandler `toml:"-"`
+	CombinedReaders    []CombinedHandler    `toml:"-"`
 }
 
 type EndpointConfig struct {
@@ -94,6 +103,10 @@ type EndpointConfig struct {
 
 	// Data freshness — overrides the endpoint template default when non-zero.
 	MaxDataAgeSecs int `toml:"max_data_age_seconds"`
+
+	// Market cache-specific fields
+	CacheMarketId uint32 `toml:"cache_market_id"`
+	ExchangeId    string `toml:"exchange_id"`
 
 	// Combined handler fields
 	CombinedSources map[string]string `toml:"combined_sources"`
@@ -145,8 +158,22 @@ func BuildQueryEndpoints(homeDir, localDir, file string) (map[string]QueryConfig
 	for _, query := range config.Queries {
 		contractReaders := make([]ContractHandler, 0)
 		rpcReaders := make([]RpcHandler, 0)
+		marketCacheReaders := make([]MarketCacheHandler, 0)
 		combinedReaders := make([]CombinedHandler, 0)
 		for _, endpoint := range query.Endpoints {
+			if endpoint.EndpointType == endpointTypeMarketCache {
+				if endpoint.CacheMarketId == 0 || endpoint.ExchangeId == "" {
+					return nil, fmt.Errorf("market_cache endpoint missing required fields (cache_market_id, exchange_id) for query %s", query.ID)
+				}
+				marketCacheReaders = append(marketCacheReaders, MarketCacheHandler{
+					EndpointID:    endpoint.EndpointType,
+					MarketId:      endpoint.MarketId,
+					CacheMarketId: endpoint.CacheMarketId,
+					ExchangeId:    endpoint.ExchangeId,
+				})
+				continue
+			}
+
 			// Handle combined endpoints
 			if endpoint.EndpointType == endpointTypeCombined {
 				if endpoint.Handler == "" {
@@ -171,71 +198,71 @@ func BuildQueryEndpoints(homeDir, localDir, file string) (map[string]QueryConfig
 								sourceName, query.ID, err)
 						}
 						contractReadersMap[sourceName] = reader
-					} else {
-						endpointType, found := strings.CutPrefix(sourceType, "rpc:")
-						if found {
-							template, exists := config.Endpoints[endpointType]
-							if !exists {
-								return nil, fmt.Errorf("RPC endpoint template not found: %s for combined source %s in query %s",
-									endpointType, sourceName, query.ID)
-							}
+					} else if endpointType, found := strings.CutPrefix(sourceType, "rpc:"); found {
+						template, exists := config.Endpoints[endpointType]
+						if !exists {
+							return nil, fmt.Errorf("RPC endpoint template not found: %s for combined source %s in query %s",
+								endpointType, sourceName, query.ID)
+						}
 
-							// Build RPC URL from template
-							url := template.URLTemplate
+						// Build RPC URL from template
+						url := template.URLTemplate
 
-							// Process source-specific parameters (e.g., "sushiswap_api_params" or "coingecko_api_params")
-							paramsKey := sourceName + "_params"
-							sourceParams := make(map[string]string)
-							if paramsRaw, exists := endpoint.CombinedConfig[paramsKey]; exists {
-								for key, value := range paramsRaw.(map[string]any) {
-									placeholder := fmt.Sprintf("{%s}", key)
-									v := fmt.Sprintf("%v", value)
-									url = strings.ReplaceAll(url, placeholder, v)
-									sourceParams[key] = v
-								}
-							}
-
-							// Replace API key if needed
-							url = strings.ReplaceAll(url, "{api_key}", template.ApiKey)
-
-							processedHeaders := make(map[string]string)
-							for key, value := range template.Headers {
-								if strings.EqualFold(value, "api_key") {
-									value = template.ApiKey
-								}
-								processedHeaders[key] = value
-							}
-
-							// Also substitute params into the query body (e.g. {pool_id} in GraphQL queries)
-							processedQuery := template.Query
-							for key, value := range sourceParams {
+						// Process source-specific parameters (e.g., "sushiswap_api_params" or "coingecko_api_params")
+						paramsKey := sourceName + "_params"
+						sourceParams := make(map[string]string)
+						if paramsRaw, exists := endpoint.CombinedConfig[paramsKey]; exists {
+							for key, value := range paramsRaw.(map[string]any) {
 								placeholder := fmt.Sprintf("{%s}", key)
-								processedQuery = strings.ReplaceAll(processedQuery, placeholder, value)
+								v := fmt.Sprintf("%v", value)
+								url = strings.ReplaceAll(url, placeholder, v)
+								sourceParams[key] = v
 							}
+						}
 
-							// Get source-specific response path (e.g., "sushiswap_api_response_path")
-							var responsePath []string
-							respPathKey := sourceName + "_response_path"
-							if respPathRaw, exists := endpoint.CombinedConfig[respPathKey]; exists {
-								if respPath, ok := respPathRaw.([]string); ok {
-									responsePath = respPath
-								} else if respPathInterface, ok := respPathRaw.([]any); ok {
-									for _, p := range respPathInterface {
-										if str, ok := p.(string); ok {
-											responsePath = append(responsePath, str)
-										}
+						// Replace API key if needed
+						url = strings.ReplaceAll(url, "{api_key}", template.ApiKey)
+
+						processedHeaders := make(map[string]string)
+						for key, value := range template.Headers {
+							if strings.EqualFold(value, "api_key") {
+								value = template.ApiKey
+							}
+							processedHeaders[key] = value
+						}
+
+						// Also substitute params into the query body (e.g. {pool_id} in GraphQL queries)
+						processedQuery := template.Query
+						for key, value := range sourceParams {
+							placeholder := fmt.Sprintf("{%s}", key)
+							processedQuery = strings.ReplaceAll(processedQuery, placeholder, value)
+						}
+
+						// Get source-specific response path (e.g., "sushiswap_api_response_path")
+						var responsePath []string
+						respPathKey := sourceName + "_response_path"
+						if respPathRaw, exists := endpoint.CombinedConfig[respPathKey]; exists {
+							if respPath, ok := respPathRaw.([]string); ok {
+								responsePath = respPath
+							} else if respPathInterface, ok := respPathRaw.([]any); ok {
+								for _, p := range respPathInterface {
+									if str, ok := p.(string); ok {
+										responsePath = append(responsePath, str)
 									}
 								}
 							}
-
-							reader, err := rpcreader.NewReader(url, template.Method, processedQuery,
-								processedHeaders, responsePath, template.Timeout, sourceParams)
-							if err != nil {
-								return nil, fmt.Errorf("failed to create RPC reader for combined source %s in query %s: %w",
-									sourceName, query.ID, err)
-							}
-							rpcReadersMap[sourceName] = reader
 						}
+
+						reader, err := rpcreader.NewReader(url, template.Method, processedQuery,
+							processedHeaders, responsePath, template.Timeout, sourceParams)
+						if err != nil {
+							return nil, fmt.Errorf("failed to create RPC reader for combined source %s in query %s: %w",
+								sourceName, query.ID, err)
+						}
+						rpcReadersMap[sourceName] = reader
+					} else if _, found := strings.CutPrefix(sourceType, "cache:"); found {
+						// Cache-backed combined sources are read by the combined handler from priceCache.
+						continue
 					}
 				}
 
@@ -368,14 +395,15 @@ func BuildQueryEndpoints(homeDir, localDir, file string) (map[string]QueryConfig
 			})
 		}
 		queryMap[query.ID] = QueryConfig{
-			ID:                query.ID,
-			AggregationMethod: query.AggregationMethod,
-			MaxSpreadPercent:  query.MaxSpreadPercent,
-			MinResponses:      query.MinResponses,
-			ResponseType:      query.ResponseType,
-			ContractReaders:   contractReaders,
-			RpcReaders:        rpcReaders,
-			CombinedReaders:   combinedReaders,
+			ID:                 query.ID,
+			AggregationMethod:  query.AggregationMethod,
+			MaxSpreadPercent:   query.MaxSpreadPercent,
+			MinResponses:       query.MinResponses,
+			ResponseType:       query.ResponseType,
+			ContractReaders:    contractReaders,
+			RpcReaders:         rpcReaders,
+			MarketCacheReaders: marketCacheReaders,
+			CombinedReaders:    combinedReaders,
 		}
 	}
 

@@ -94,3 +94,17 @@ func (etp *ExchangeToPrice) GetValidPrices(
 	}
 	return validExchangePricesForMarket
 }
+
+// GetValidPriceForExchange returns the most recent valid price for a specific
+// exchange in this market.
+func (etp *ExchangeToPrice) GetValidPriceForExchange(
+	exchangeId string,
+	cutoffTime time.Time,
+) (uint64, bool) {
+	priceTimestamp, exists := etp.exchangeToPriceTimestamp[exchangeId]
+	if !exists {
+		return 0, false
+	}
+
+	return priceTimestamp.GetValidPrice(cutoffTime)
+}

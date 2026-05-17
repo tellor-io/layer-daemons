@@ -2,13 +2,17 @@ package customquery
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"math"
+	"net/http"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	gometrics "github.com/hashicorp/go-metrics"
+	"github.com/tellor-io/layer-daemons/constants"
 	"github.com/tellor-io/layer-daemons/custom_query/combined/combined_handler"
 	"github.com/tellor-io/layer-daemons/custom_query/contracts/contract_handlers"
 	rpc_handler "github.com/tellor-io/layer-daemons/custom_query/rpc/rpc_handler"
@@ -64,11 +68,11 @@ func FetchPrice(
 	query QueryConfig,
 	priceCache *pricefeedservertypes.MarketToExchangePrices,
 ) (*FetchPriceResult, error) {
-	// Create a context with timeout
+	// Keep custom-query fan-out bounded by the reporter deadline and a local cap.
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	totalEndpoints := len(query.RpcReaders) + len(query.ContractReaders) + len(query.CombinedReaders)
+	totalEndpoints := len(query.RpcReaders) + len(query.ContractReaders) + len(query.MarketCacheReaders) + len(query.CombinedReaders)
 	results := make(chan Result, totalEndpoints)
 	var wg sync.WaitGroup
 
@@ -91,6 +95,15 @@ func FetchPrice(
 		}(rpchandler)
 
 	}
+	// Launch goroutines for cached market endpoints
+	for _, marketCacheHandler := range query.MarketCacheReaders {
+		wg.Add(1)
+		go func(ep MarketCacheHandler) {
+			defer wg.Done()
+			result := fetchFromMarketCacheEndpoint(ep, priceCache)
+			results <- result
+		}(marketCacheHandler)
+	}
 	// Launch goroutines for combined endpoints
 	for _, combinedHandler := range query.CombinedReaders {
 		wg.Add(1)
@@ -106,32 +119,58 @@ func FetchPrice(
 		close(results)
 	}()
 
-	// Collect results
 	var allResults []Result
-	// Count successful results
 	var successfulResults []Result
-	for result := range results {
+	var aggregateErr error
+
+	for results != nil {
+		var result Result
+		var ok bool
+
+		select {
+		case result, ok = <-results:
+			if !ok {
+				results = nil
+				continue
+			}
+		case <-ctx.Done():
+			results = nil
+			continue
+		}
+
 		allResults = append(allResults, result)
 		if result.Err == nil {
 			successfulResults = append(successfulResults, result)
-			// Emit metrics for successful results
 			emitPriceForTelemetry(result, query)
 			emitSuccessForTelemetry(result, query)
 		} else {
-			// Emit error metrics for failed results
 			emitErrorForTelemetry(result, query)
+			continue
+		}
+
+		if len(successfulResults) >= query.MinResponses {
+			aggregatedValue, err := aggregateResults(successfulResults, query.AggregationMethod, query.ResponseType, query.MaxSpreadPercent)
+			if err == nil {
+				cancel()
+				return fetchPriceResultFromCollected(allResults, successfulResults, query, totalEndpoints, aggregatedValue), nil
+			}
+			aggregateErr = err
 		}
 	}
+
 	// Check if we have enough successful responses
 	if len(successfulResults) < query.MinResponses {
 		return fetchPriceResultFromCollected(allResults, successfulResults, query, totalEndpoints, ""),
 			fmt.Errorf("insufficient successful responses: got %d, need %d",
 				len(successfulResults), query.MinResponses)
 	}
-	fmt.Println("Successful results:", successfulResults)
+
 	// Aggregate results
 	aggregatedValue, err := aggregateResults(successfulResults, query.AggregationMethod, query.ResponseType, query.MaxSpreadPercent)
 	if err != nil {
+		if aggregateErr != nil {
+			err = aggregateErr
+		}
 		return fetchPriceResultFromCollected(allResults, successfulResults, query, totalEndpoints, ""), err
 	}
 
@@ -167,9 +206,49 @@ func emitErrorForTelemetry(result Result, query QueryConfig) {
 		[]gometrics.Label{
 			metrics.GetLabelForStringValue(metrics.MarketId, result.MarketId),
 			metrics.GetLabelForStringValue(metrics.ExchangeId, result.SourceId),
-			metrics.GetLabelForStringValue(metrics.Reason, result.Err.Error()),
+			metrics.GetLabelForStringValue(metrics.Reason, normalizedErrorReason(result.Err)),
 		},
 	)
+}
+
+func normalizedErrorReason(err error) string {
+	if err == nil {
+		return ""
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return "timeout"
+	}
+
+	errText := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(errText, "context deadline exceeded"),
+		strings.Contains(errText, "timeout"),
+		strings.Contains(errText, "client.timeout exceeded"):
+		return "timeout"
+	case strings.Contains(errText, "429"),
+		strings.Contains(errText, "rate limit"),
+		strings.Contains(errText, "too many requests"):
+		return metrics.RateLimit
+	case containsHTTPStatus(errText, http.StatusInternalServerError, 599):
+		return metrics.HttpGet5xx
+	case containsHTTPStatus(errText, http.StatusBadRequest, 499):
+		return "http_4xx"
+	case strings.Contains(errText, "unmarshal"),
+		strings.Contains(errText, "decode"),
+		strings.Contains(errText, "parse"):
+		return "decode_error"
+	default:
+		return "unknown"
+	}
+}
+
+func containsHTTPStatus(errText string, minStatus, maxStatus int) bool {
+	for status := minStatus; status <= maxStatus; status++ {
+		if strings.Contains(errText, strconv.Itoa(status)) {
+			return true
+		}
+	}
+	return false
 }
 
 // fetchFromContractEndpoint fetches data from a smart contract
@@ -199,7 +278,6 @@ func fetchFromContractEndpoint(
 
 	defer contractReader.Reader.Close()
 
-	fmt.Println("Contract value:", value)
 	return Result{
 		Value:      value,
 		EndpointID: "contract:" + contractReader.Handler,
@@ -246,6 +324,51 @@ func fetchFromRpcEndpoint(
 	}
 }
 
+func fetchFromMarketCacheEndpoint(
+	marketCacheHandler MarketCacheHandler,
+	priceCache *pricefeedservertypes.MarketToExchangePrices,
+) Result {
+	if priceCache == nil {
+		return Result{
+			Err:        fmt.Errorf("price cache is nil"),
+			EndpointID: marketCacheHandler.EndpointID,
+			MarketId:   marketCacheHandler.MarketId,
+			SourceId:   marketCacheHandler.ExchangeId,
+		}
+	}
+
+	marketParam, found := constants.StaticMarketParamsConfig[marketCacheHandler.CacheMarketId]
+	if !found {
+		return Result{
+			Err:        fmt.Errorf("market param not found for cache market ID %d", marketCacheHandler.CacheMarketId),
+			EndpointID: marketCacheHandler.EndpointID,
+			MarketId:   marketCacheHandler.MarketId,
+			SourceId:   marketCacheHandler.ExchangeId,
+		}
+	}
+
+	rawPrice, found := priceCache.GetValidExchangePrice(
+		marketCacheHandler.CacheMarketId,
+		marketCacheHandler.ExchangeId,
+		time.Now(),
+	)
+	if !found {
+		return Result{
+			Err:        fmt.Errorf("no valid cached price found for market ID %d on exchange %s", marketCacheHandler.CacheMarketId, marketCacheHandler.ExchangeId),
+			EndpointID: marketCacheHandler.EndpointID,
+			MarketId:   marketCacheHandler.MarketId,
+			SourceId:   marketCacheHandler.ExchangeId,
+		}
+	}
+
+	return Result{
+		Value:      float64(rawPrice) * math.Pow10(int(marketParam.Exponent)),
+		EndpointID: marketCacheHandler.EndpointID,
+		MarketId:   marketCacheHandler.MarketId,
+		SourceId:   marketCacheHandler.ExchangeId,
+	}
+}
+
 // aggregateResults aggregates results using the specified method
 func aggregateResults(results []Result, method, responseType string, maxSpreadPercent float64) (string, error) {
 	if len(results) == 0 {
@@ -282,7 +405,7 @@ func fetchFromCombinedEndpoint(
 		}
 	}
 
-	value, err := handler.FetchValue(ctx, combinedReader.ContractReaders, combinedReader.RpcReaders, priceCache, combinedReader.MinResponses, combinedReader.MaxSpreadPercent, combinedReader.MaxDataAge)
+	value, err := handler.FetchValue(ctx, combinedReader.ContractReaders, combinedReader.RpcReaders, priceCache, combinedReader.Config, combinedReader.MinResponses, combinedReader.MaxSpreadPercent, combinedReader.MaxDataAge)
 	if err != nil {
 		return Result{
 			Err:        fmt.Errorf("failed to fetch combined value: %w", err),
@@ -295,7 +418,6 @@ func fetchFromCombinedEndpoint(
 		defer reader.Close()
 	}
 
-	fmt.Println("Combined value:", value)
 	return Result{
 		Value:      value,
 		EndpointID: "combined:" + combinedReader.Handler,

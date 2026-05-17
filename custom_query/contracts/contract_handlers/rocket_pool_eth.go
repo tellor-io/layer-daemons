@@ -60,7 +60,6 @@ func (r *RocketPoolETHHandler) FetchValue(
 	finalResult := new(big.Float).Quo(valueFloat, divisorFloat)
 
 	finalValue, _ := finalResult.Float64()
-	fmt.Printf("Rocket Pool ETH Price (USD): $%.2f\n", finalValue)
 
 	return finalValue, nil
 }

@@ -64,6 +64,11 @@ const (
 	TimeoutMs = 3000
 	MaxQueries = 1
 	[[exchanges]]
+	ExchangeId = "Curve"
+	IntervalMs = 20000
+	TimeoutMs = 3000
+	MaxQueries = 3
+	[[exchanges]]
 	ExchangeId = "Gate"
 	IntervalMs = 2000
 	TimeoutMs = 3000

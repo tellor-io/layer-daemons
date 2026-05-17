@@ -127,3 +127,23 @@ func (mte *MarketToExchangePrices) GetValidMedianPrices(
 
 	return marketIdToMedianPrice
 }
+
+// GetValidExchangePrice returns a valid cached price for one market/exchange
+// pair if the price exists and is fresh enough for the cache's maxPriceAge.
+func (mte *MarketToExchangePrices) GetValidExchangePrice(
+	marketId uint32,
+	exchangeId string,
+	readTime time.Time,
+) (uint64, bool) {
+	cutoffTime := readTime.Add(-mte.maxPriceAge)
+
+	mte.Lock()
+	defer mte.Unlock()
+
+	exchangeToPrice, ok := mte.marketToExchangePrices[marketId]
+	if !ok {
+		return 0, false
+	}
+
+	return exchangeToPrice.GetValidPriceForExchange(exchangeId, cutoffTime)
+}

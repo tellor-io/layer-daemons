@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/tellor-io/layer-daemons/constants"
 	"github.com/tellor-io/layer-daemons/lib"
 	libtime "github.com/tellor-io/layer-daemons/lib/time"
 	price_function "github.com/tellor-io/layer-daemons/pricefeed/client/sources"
@@ -17,7 +18,7 @@ const (
 	UnexpectedResponseStatusMessage = "Unexpected response status code of:"
 )
 
-var ErrRateLimiting = fmt.Errorf("status 429 - rate limit exceeded")
+var ErrRateLimiting = constants.ErrRateLimiting
 
 // ExchangeQueryHandlerImpl is the struct that implements the `ExchangeQueryHandler` interface.
 type ExchangeQueryHandlerImpl struct {

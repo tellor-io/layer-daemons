@@ -291,6 +291,30 @@ func TestQuery(t *testing.T) {
 	}
 }
 
+func TestQueryRateLimitUsesSharedSentinel(t *testing.T) {
+	eqh := ExchangeQueryHandlerImpl{generateMockTimeProvider(time.Unix(0, 0))}
+	baseEqd.PriceFunction = priceFunc
+	requestHandler := generateMockRequestHandler(
+		CreateRequestUrl(baseEqd.Url, []string{constants.BtcUsdPair}),
+		http.StatusTooManyRequests,
+		nil,
+	)
+
+	prices, unavailableMarkets, err := eqh.Query(
+		context.Background(),
+		baseEqd,
+		baseEmc,
+		[]types.MarketId{exchange_config.MARKET_BTC_USD},
+		requestHandler,
+		testMarketExponentMap,
+	)
+
+	require.Error(t, err)
+	require.True(t, errors.Is(err, pf_constants.ErrRateLimiting))
+	require.Nil(t, prices)
+	require.Nil(t, unavailableMarkets)
+}
+
 func generateMockTimeProvider(time time.Time) *mocks.TimeProvider {
 	mockTimeProvider := &mocks.TimeProvider{}
 	mockTimeProvider.On("Now").Return(time)

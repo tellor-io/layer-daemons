@@ -18,6 +18,7 @@ type CombinedHandler interface {
 		contractReaders map[string]*contractreader.Reader,
 		rpcReaders map[string]*rpcreader.Reader,
 		priceCache *pricefeedservertypes.MarketToExchangePrices,
+		config map[string]any,
 		minResponses int,
 		maxSpreadPercent float64,
 		maxDataAge time.Duration,

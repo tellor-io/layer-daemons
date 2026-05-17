@@ -10,4 +10,7 @@ const (
 	ATOMUSD_ID  uint32 = 7
 	STETHUSD_ID uint32 = 8
 	USDEUSD_ID  uint32 = 9
+	SDAIUSD_ID  uint32 = 101
+	SUSDSUSD_ID uint32 = 102
+	FRXUSD_ID   uint32 = 103
 )

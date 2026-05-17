@@ -33,6 +33,8 @@ const (
 	EXCHANGE_ID_COINBASE_PRO types.ExchangeId = "CoinbasePro"
 	// EXCHANGE_ID_COINBASE_RATES is the id for Coinbase exchange rates API.
 	EXCHANGE_ID_COINBASE_RATES types.ExchangeId = "CoinbaseRates"
+	// EXCHANGE_ID_CURVE is the id for Curve's price API.
+	EXCHANGE_ID_CURVE types.ExchangeId = "Curve"
 	// EXCHANGE_ID_TEST_EXCHANGE is the id for test exchange.
 	EXCHANGE_ID_TEST_EXCHANGE types.ExchangeId = "TestExchange"
 	// EXCHANGE_ID_TEST_VOLATILE_EXCHANGE is the id for test volatile exchange.
