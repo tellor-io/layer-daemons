@@ -12,6 +12,7 @@ import (
 	"github.com/tellor-io/layer-daemons/lib"
 	"github.com/tellor-io/layer-daemons/lib/metrics"
 	"github.com/tellor-io/layer-daemons/mocks"
+	"github.com/tellor-io/layer-daemons/pricefeed/client/sources"
 	"github.com/tellor-io/layer-daemons/pricefeed/client/types"
 	"github.com/tellor-io/layer-daemons/testutil/constants"
 	"github.com/tellor-io/layer-daemons/testutil/daemons/pricefeed"
@@ -45,7 +46,7 @@ func TestPriceFetcherBacksOffAndRecovers(t *testing.T) {
 	require.True(t, pf.shouldSkipForBackoff())
 	require.Equal(t, 1, pf.consecutiveFailures)
 	require.Equal(t, metrics.RateLimit, pf.lastBackoffReason)
-	require.True(t, pf.backoffUntil.After(time.Now()))
+	require.Greater(t, time.Until(pf.backoffUntil), time.Minute)
 
 	pf.observeQuerySuccess()
 	require.False(t, pf.shouldSkipForBackoff())
@@ -53,6 +54,15 @@ func TestPriceFetcherBacksOffAndRecovers(t *testing.T) {
 
 	pf.observeQueryFailure(context.DeadlineExceeded)
 	require.True(t, pf.shouldSkipForBackoff())
+	require.Greater(t, time.Until(pf.backoffUntil), 29*time.Second)
+	require.Equal(t, metrics.HttpGetTimeout, pf.lastBackoffReason)
+}
+
+func TestTransientBackoffReasonClassifiesExchangeDeadlineText(t *testing.T) {
+	reason, ok := transientBackoffReason(sources.NewExchangeError("Mexc", "context deadline exceeded"))
+
+	require.True(t, ok)
+	require.Equal(t, metrics.HttpGetTimeout, reason)
 }
 
 // TestRunTaskLoop tests that different exchange configurations results in the expected queries being made, and prices

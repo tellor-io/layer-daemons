@@ -211,19 +211,20 @@ func (p *PriceFetcher) observeQueryFailure(err error) {
 
 	p.consecutiveFailures++
 	baseDelay := time.Duration(p.exchangeQueryConfig.IntervalMs) * time.Millisecond
-	if baseDelay <= 0 {
-		baseDelay = time.Second
-	}
 	if reason == metrics.RateLimit {
-		baseDelay *= 4
+		if baseDelay < 2*time.Minute {
+			baseDelay = 2 * time.Minute
+		}
 	} else {
-		baseDelay *= 2
+		if baseDelay < 30*time.Second {
+			baseDelay = 30 * time.Second
+		}
 	}
 
 	multiplier := 1 << min(p.consecutiveFailures-1, 5)
 	delay := time.Duration(multiplier) * baseDelay
-	if delay > time.Minute {
-		delay = time.Minute
+	if delay > 5*time.Minute {
+		delay = 5 * time.Minute
 	}
 	jitterCap := baseDelay / 4
 	if jitterCap > 0 {
@@ -235,18 +236,19 @@ func (p *PriceFetcher) observeQueryFailure(err error) {
 }
 
 func transientBackoffReason(err error) (string, bool) {
+	errText := strings.ToLower(err.Error())
 	switch {
 	case err == nil:
 		return "", false
 	case errors.Is(err, constants.ErrRateLimiting):
 		return metrics.RateLimit, true
-	case errors.Is(err, context.DeadlineExceeded):
+	case errors.Is(err, context.DeadlineExceeded), strings.Contains(errText, "context deadline exceeded"), strings.Contains(errText, "timeout"):
 		return metrics.HttpGetTimeout, true
 	case errors.Is(err, syscall.ECONNRESET):
 		return metrics.HttpGetHangup, true
 	case price_function.IsGenericExchangeError(err):
 		return metrics.HttpGet5xx, true
-	case strings.Contains(strings.ToLower(err.Error()), "too many requests"):
+	case strings.Contains(errText, "too many requests"):
 		return metrics.RateLimit, true
 	default:
 		return "", false

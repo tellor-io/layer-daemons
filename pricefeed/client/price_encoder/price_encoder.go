@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"syscall"
 	"time"
 
@@ -318,7 +319,7 @@ func (p *PriceEncoderImpl) ProcessPriceFetcherResponse(response *price_fetcher.P
 	if response.Err == nil {
 		p.UpdatePrice(response.Price)
 	} else {
-		if errors.Is(response.Err, context.DeadlineExceeded) {
+		if isTimeoutError(response.Err) {
 			// Log info if there are timeout errors in the ingested buffered channel prices.
 			recordPriceUpdateExchangeFailure(
 				metrics.HttpGetTimeout,
@@ -403,4 +404,14 @@ func (p *PriceEncoderImpl) ProcessPriceFetcherResponse(response *price_fetcher.P
 			)
 		}
 	}
+}
+
+func isTimeoutError(err error) bool {
+	if err == nil {
+		return false
+	}
+	errText := strings.ToLower(err.Error())
+	return errors.Is(err, context.DeadlineExceeded) ||
+		strings.Contains(errText, "context deadline exceeded") ||
+		strings.Contains(errText, "timeout")
 }

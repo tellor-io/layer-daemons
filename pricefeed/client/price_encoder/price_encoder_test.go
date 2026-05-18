@@ -351,6 +351,10 @@ func TestProcessPriceFetcherResponse_Error(t *testing.T) {
 			err:            context.DeadlineExceeded,
 			expectedReason: metrics.HttpGetTimeout,
 		},
+		"Exchange-specific deadline text": {
+			err:            sources.NewExchangeError("Mexc", "context deadline exceeded"),
+			expectedReason: metrics.HttpGetTimeout,
+		},
 		"Rate limit error": {
 			err:            pf_constants.ErrRateLimiting,
 			logAsError:     true,
