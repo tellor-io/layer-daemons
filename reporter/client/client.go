@@ -82,6 +82,10 @@ type Client struct {
 	refreshGasEstimatesInterval time.Duration
 	gasEstimator                *gasEstimateState
 
+	autoBalance            autoBalanceSettings
+	autoBalanceMu          sync.Mutex
+	autoBalanceBridgedDate string // UTC YYYY-MM-DD after a successful bridge
+
 	// Resources that need cleanup
 	grpcConn    *grpc.ClientConn
 	grpcClient  daemontypes.GrpcClient
@@ -243,17 +247,16 @@ func (c *Client) Start(
 		c.logger.Info("Auto unbonding disabled")
 	}
 
-	// Read and validate auto-balance-to-keep configuration
-	autoBalanceToKeep := viper.GetUint64("auto-balance-to-keep")
-	autoBalanceEthAddr := strings.TrimPrefix(viper.GetString("auto-balance-eth-addr"), "0x")
-	if autoBalanceToKeep > 0 {
-		if autoBalanceEthAddr == "" {
-			return fmt.Errorf("auto-balance-eth-addr is required when auto-balance-to-keep > 0")
-		}
+	autoBalance, err := loadAutoBalanceSettings()
+	if err != nil {
+		return err
+	}
+	c.autoBalance = autoBalance
+	if c.autoBalance.enabled {
 		c.logger.Info("Auto balance-to-keep enabled",
-			"balance_to_keep_loya", autoBalanceToKeep,
-			"execution_time", viper.GetString("auto-balance-execution-time"),
-			"eth_addr", "0x"+autoBalanceEthAddr,
+			"balance_to_keep_loya", c.autoBalance.balanceToKeep,
+			"execution_time", fmt.Sprintf("%02d:%02d", c.autoBalance.hour, c.autoBalance.minute),
+			"eth_addr", "0x"+c.autoBalance.ethAddr,
 		)
 	} else {
 		c.logger.Info("Auto balance-to-keep disabled")

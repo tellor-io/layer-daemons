@@ -301,13 +301,12 @@ func TestStop(t *testing.T) {
 	grpcServer := grpc.NewServer()
 	// pricetypes.RegisterQueryServer(grpcServer, &pricesQueryServer)
 
-	// Start gRPC server with cleanup.
-	defer grpcServer.Stop()
+	ls, err := net.Listen("tcp", appFlags.GrpcAddress)
+	require.NoError(t, err)
+
+	serveDone := make(chan error, 1)
 	go func() {
-		ls, err := net.Listen("tcp", appFlags.GrpcAddress)
-		require.NoError(t, err)
-		err = grpcServer.Serve(ls)
-		require.NoError(t, err)
+		serveDone <- grpcServer.Serve(ls)
 	}()
 
 	client := StartNewClient(
@@ -324,6 +323,16 @@ func TestStop(t *testing.T) {
 
 	// Stop the daemon.
 	client.Stop()
+
+	grpcServer.Stop()
+	select {
+	case serveErr := <-serveDone:
+		if serveErr != nil && !errors.Is(serveErr, grpc.ErrServerStopped) {
+			require.NoError(t, serveErr)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("gRPC server did not exit after Stop()")
+	}
 }
 
 func TestPriceEncoder_NoWrites(t *testing.T) {

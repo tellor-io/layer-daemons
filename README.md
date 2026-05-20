@@ -131,3 +131,46 @@ The Price Guard is a safety mechanism that prevents the reporter from submitting
 4. **Update on Blocked:**
    - If `true`: A blocked price becomes the new baseline for future checks.
    - If `false`: The old price remains the baseline; future submissions must be within threshold of the *old* price.
+
+## Auto balance-to-keep
+
+The reporter daemon can keep a target **loya** balance in the reporter wallet and automatically bridge any excess to Ethereum once per day. This uses Layer’s `MsgWithdrawTokens` bridge message (`isBridge` gas bucket, same tx pipeline as other bridge operations).
+
+### Flags
+
+Configure via CLI flags only (not environment variables):
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--auto-balance-to-keep` | uint64 | `0` | Target wallet balance in **loya** (`0` = disabled). Any amount above this (minus the gas reserve below) is bridged. |
+| `--auto-balance-execution-time` | string | `00:00` | UTC time to check balance and bridge, format **`HH:MM`** with two-digit hour and minute (e.g. `03:00`, `15:30`). |
+| `--auto-balance-eth-addr` | string | `""` | Ethereum recipient for bridged tokens. Required when `--auto-balance-to-keep > 0`. May include or omit the `0x` prefix. Validated with standard hex address checks at startup. |
+
+### Behavior
+
+1. **Schedule:** Once per UTC day at `--auto-balance-execution-time`, the daemon queries the reporter wallet’s `loya` balance.
+2. **Amount:** `bridge_amount = wallet_balance - auto-balance-to-keep - 1_000_000` (a fixed **1 TRB** reserve in loya is left for future gas). If `bridge_amount <= 0`, nothing is sent.
+3. **Already bridged today:** After a successful on-chain withdraw, further runs that UTC day are skipped. This guard is **in-memory only**; restarting the daemon the same day may attempt another bridge until one succeeds again.
+4. **Retries:** Failed broadcast or non-zero tx code is retried up to **3** times via the tx channel before giving up until the next scheduled run.
+5. **Shutdown:** Bridge txs are enqueued with `trySend` so shutdown does not panic on a closed channel.
+
+### Startup validation
+
+When `--auto-balance-to-keep > 0`, the reporter **fails to start** if:
+
+- `--auto-balance-eth-addr` is missing or not a valid Ethereum address
+- `--auto-balance-execution-time` is not valid `HH:MM` (two-digit hour/minute, hour 0–23, minute 0–59)
+
+### Example
+
+Keep 5 TRB in the wallet (5_000_000 loya), run the check daily at 03:00 UTC, and bridge excess to an Ethereum address:
+
+```bash
+reporterd start \
+  --auto-balance-to-keep=5000000 \
+  --auto-balance-execution-time=03:00 \
+  --auto-balance-eth-addr=0x6Ec401744008f4B018Ed9A36f76e6629799Ee50E \
+  # ... other required reporter flags (--home, --from, --grpc, --node, etc.)
+```
+
+**Note:** Amounts are in **loya** (micro-denom), not whole TRB. `1 TRB = 1_000_000 loya`.

@@ -8,8 +8,10 @@ import (
 
 	"github.com/tellor-io/layer-daemons/lib/metrics"
 	"github.com/tellor-io/layer/utils"
+	bridgetypes "github.com/tellor-io/layer/x/bridge/types"
 	oracletypes "github.com/tellor-io/layer/x/oracle/types"
 
+	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/cosmos/cosmos-sdk/telemetry"
 )
 
@@ -102,7 +104,18 @@ func (c *Client) GenerateAndBroadcastSpotPriceReport(ctx context.Context, qd []b
 	return nil
 }
 
-func (c *Client) HandleBridgeDepositTxInChannel(ctx context.Context, data TxChannelInfo) {
+func (c *Client) HandleBridgeTxInChannel(ctx context.Context, data TxChannelInfo) {
+	switch data.Msg.(type) {
+	case *oracletypes.MsgSubmitValue:
+		c.handleBridgeDepositTxInChannel(ctx, data)
+	case *bridgetypes.MsgWithdrawTokens:
+		c.handleAutoBalanceWithdrawTxInChannel(ctx, data)
+	default:
+		c.logger.Error("unsupported bridge transaction type", "type", sdk.MsgTypeURL(data.Msg))
+	}
+}
+
+func (c *Client) handleBridgeDepositTxInChannel(ctx context.Context, data TxChannelInfo) {
 	resp, err := c.sendTx(ctx, 0, true, data.Msg) // 0 = no queryMeta tracking for bridge transactions
 	if err != nil {
 		c.logger.Error("submitting deposit report transaction",
@@ -152,6 +165,53 @@ func (c *Client) HandleBridgeDepositTxInChannel(ctx context.Context, data TxChan
 	c.logger.Info(fmt.Sprintf("Response from bridge tx report: %v", resp.TxResult))
 }
 
+func (c *Client) handleAutoBalanceWithdrawTxInChannel(ctx context.Context, data TxChannelInfo) {
+	withdrawMsg, ok := data.Msg.(*bridgetypes.MsgWithdrawTokens)
+	if !ok {
+		c.logger.Error("auto balance-to-keep: expected MsgWithdrawTokens")
+		return
+	}
+
+	resp, err := c.sendTx(ctx, 0, true, data.Msg)
+	if err != nil {
+		c.logger.Error("auto balance-to-keep: submitting withdraw transaction",
+			"error", err,
+			"attemptsLeft", data.NumRetries,
+			"recipient", withdrawMsg.Recipient,
+			"amount", withdrawMsg.Amount.String(),
+		)
+		if data.NumRetries == 0 {
+			c.logger.Error("auto balance-to-keep: failed to submit withdraw after all allotted attempts", "error", err)
+			return
+		}
+		data.NumRetries--
+		c.trySend(ctx, data)
+		return
+	}
+
+	if resp.TxResult.Code != 0 {
+		c.logger.Error("auto balance-to-keep: withdraw transaction failed",
+			"code", resp.TxResult.Code,
+			"recipient", withdrawMsg.Recipient,
+			"amount", withdrawMsg.Amount.String(),
+			"log", resp.TxResult.Log,
+			"attemptsLeft", data.NumRetries,
+		)
+		if data.NumRetries == 0 {
+			return
+		}
+		data.NumRetries--
+		c.trySend(ctx, data)
+		return
+	}
+
+	c.markAutoBalanceBridgedToday(time.Now())
+	c.logger.Info("auto balance-to-keep: withdraw transaction succeeded",
+		"recipient", withdrawMsg.Recipient,
+		"amount", withdrawMsg.Amount.String(),
+	)
+}
+
 func (c *Client) BroadcastTxMsgToChain(ctx context.Context) {
 	defer c.broadcastWg.Wait()
 
@@ -178,7 +238,7 @@ func (c *Client) BroadcastTxMsgToChain(ctx context.Context) {
 						c.logger.Error(fmt.Sprintf("Error sending tx: %v", err))
 					}
 				} else {
-					c.HandleBridgeDepositTxInChannel(txCtx, txInfo)
+					c.HandleBridgeTxInChannel(txCtx, txInfo)
 				}
 			}(obj)
 

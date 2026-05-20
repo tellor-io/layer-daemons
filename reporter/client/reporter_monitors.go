@@ -26,7 +26,6 @@ import (
 	"github.com/cosmos/cosmos-sdk/types/query"
 	banktypes "github.com/cosmos/cosmos-sdk/x/bank/types"
 	stakingtypes "github.com/cosmos/cosmos-sdk/x/staking/types"
-	bridgetypes "github.com/tellor-io/layer/x/bridge/types"
 )
 
 const (
@@ -315,34 +314,16 @@ func (c *Client) AutoUnbondStakePeriodically(ctx context.Context, wg *sync.WaitG
 func (c *Client) AutoBridgeWalletExcessPeriodically(ctx context.Context, wg *sync.WaitGroup) {
 	defer wg.Done()
 
-	balanceToKeep := viper.GetUint64("auto-balance-to-keep")
-	if balanceToKeep == 0 {
+	if !c.autoBalance.enabled {
 		c.logger.Info("Auto balance-to-keep is disabled")
 		return
 	}
 
-	ethAddr := strings.TrimPrefix(viper.GetString("auto-balance-eth-addr"), "0x")
-	executionTime := viper.GetString("auto-balance-execution-time")
-
-	// Parse HH:MM
-	parts := strings.SplitN(executionTime, ":", 2)
-	if len(parts) != 2 {
-		c.logger.Error("invalid auto-balance-execution-time, expected HH:MM", "value", executionTime)
-		return
-	}
-	hour, errH := strconv.Atoi(parts[0])
-	minute, errM := strconv.Atoi(parts[1])
-	if errH != nil || errM != nil || hour < 0 || hour > 23 || minute < 0 || minute > 59 {
-		c.logger.Error("invalid auto-balance-execution-time value", "value", executionTime)
-		return
-	}
+	cfg := c.autoBalance
 
 	for {
 		now := time.Now().UTC()
-		next := time.Date(now.Year(), now.Month(), now.Day(), hour, minute, 0, 0, time.UTC)
-		if !now.Before(next) {
-			next = next.Add(24 * time.Hour)
-		}
+		next := nextAutoBalanceRunUTC(now, cfg.hour, cfg.minute)
 
 		select {
 		case <-ctx.Done():
@@ -351,24 +332,33 @@ func (c *Client) AutoBridgeWalletExcessPeriodically(ctx context.Context, wg *syn
 		case <-time.After(time.Until(next)):
 		}
 
+		runNow := time.Now().UTC()
+		if c.autoBalanceAlreadyBridgedToday(runNow) {
+			c.logger.Info("auto balance-to-keep: already bridged today, skipping",
+				"date", utcDateString(runNow),
+			)
+			continue
+		}
+
 		c.logger.Info("Auto balance-to-keep: checking wallet balance")
 
 		balResp, err := c.BankClient.Balance(ctx, &banktypes.QueryBalanceRequest{
 			Address: c.accAddr.String(),
-			Denom:   "loya",
+			Denom:   autoBalanceDenom,
 		})
 		if err != nil {
 			c.logger.Error("auto balance-to-keep: failed to query wallet balance", "error", err)
 			continue
 		}
 
-		walletBal := balResp.Balance.Amount
-		keepAmt := math.NewIntFromUint64(balanceToKeep)
-		// Reserve 1 TRB (1_000_000 loya) for future gas so the wallet can keep operating.
-		gasReserve := math.NewInt(1_000_000)
-		amountToBridge := walletBal.Sub(keepAmt).Sub(gasReserve)
+		walletBal := math.ZeroInt()
+		if balResp.Balance != nil {
+			walletBal = balResp.Balance.Amount
+		}
 
-		if !amountToBridge.IsPositive() {
+		amountToBridge, shouldBridge := computeAutoBalanceBridgeAmount(walletBal, cfg.balanceToKeep)
+		if !shouldBridge {
+			keepAmt := math.NewIntFromUint64(cfg.balanceToKeep)
 			c.logger.Info("auto balance-to-keep: wallet below threshold, nothing to bridge",
 				"wallet_loya", walletBal.String(),
 				"keep_loya", keepAmt.String(),
@@ -378,17 +368,21 @@ func (c *Client) AutoBridgeWalletExcessPeriodically(ctx context.Context, wg *syn
 
 		c.logger.Info("auto balance-to-keep: bridging excess",
 			"wallet_loya", walletBal.String(),
-			"keep_loya", keepAmt.String(),
+			"keep_loya", cfg.balanceToKeep,
 			"bridge_amount_loya", amountToBridge.String(),
-			"destination", "0x"+ethAddr,
+			"destination", "0x"+cfg.ethAddr,
 		)
 
-		msg := &bridgetypes.MsgWithdrawTokens{
-			Creator:   c.accAddr.String(),
-			Recipient: ethAddr,
-			Amount:    sdk.NewCoin("loya", amountToBridge),
+		msg := buildAutoBalanceWithdrawMsg(c.accAddr.String(), cfg.ethAddr, amountToBridge)
+		sent := c.trySend(ctx, TxChannelInfo{
+			Msg:         msg,
+			isBridge:    true,
+			NumRetries:  autoBalanceBridgeMaxRetries,
+			QueryMetaId: 0,
+		})
+		if !sent {
+			c.logger.Error("auto balance-to-keep: failed to enqueue bridge transaction (shutting down)")
 		}
-		c.txChan <- TxChannelInfo{Msg: msg, isBridge: true, NumRetries: 0, QueryMetaId: 0}
 	}
 }
 
