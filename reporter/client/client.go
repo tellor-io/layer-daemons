@@ -31,6 +31,7 @@ import (
 	"github.com/cosmos/cosmos-sdk/crypto/keyring"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	authtypes "github.com/cosmos/cosmos-sdk/x/auth/types"
+	banktypes "github.com/cosmos/cosmos-sdk/x/bank/types"
 )
 
 const defaultGas = uint64(240000)
@@ -57,6 +58,7 @@ type Client struct {
 	AccountName string
 	// Query clients
 	OracleQueryClient oracletypes.QueryClient
+	BankClient        banktypes.QueryClient
 
 	ReporterClient  reportertypes.QueryClient
 	CmtService      cmtservice.ServiceClient
@@ -155,6 +157,7 @@ func (c *Client) Start(
 
 	// Initialize the query clients. These are used to query the Cosmos gRPC query services.
 	c.OracleQueryClient = oracletypes.NewQueryClient(conn)
+	c.BankClient = banktypes.NewQueryClient(conn)
 	c.ReporterClient = reportertypes.NewQueryClient(conn)
 	c.GlobalfeeClient = globalfeetypes.NewQueryClient(conn)
 	c.CmtService = cmtservice.NewServiceClient(conn)
@@ -239,6 +242,23 @@ func (c *Client) Start(
 	} else {
 		c.logger.Info("Auto unbonding disabled")
 	}
+
+	// Read and validate auto-balance-to-keep configuration
+	autoBalanceToKeep := viper.GetUint64("auto-balance-to-keep")
+	autoBalanceEthAddr := strings.TrimPrefix(viper.GetString("auto-balance-eth-addr"), "0x")
+	if autoBalanceToKeep > 0 {
+		if autoBalanceEthAddr == "" {
+			return fmt.Errorf("auto-balance-eth-addr is required when auto-balance-to-keep > 0")
+		}
+		c.logger.Info("Auto balance-to-keep enabled",
+			"balance_to_keep_loya", autoBalanceToKeep,
+			"execution_time", viper.GetString("auto-balance-execution-time"),
+			"eth_addr", "0x"+autoBalanceEthAddr,
+		)
+	} else {
+		c.logger.Info("Auto balance-to-keep disabled")
+	}
+
 	if c.refreshGasEstimatesInterval > 0 {
 		c.logger.Info("Periodic gas estimate refresh enabled", "interval", c.refreshGasEstimatesInterval.String())
 	} else {
@@ -351,6 +371,9 @@ func StartReporterDaemonTaskLoop(
 
 	wg.Add(1)
 	go client.AutoUnbondStakePeriodically(ctx, wg)
+
+	wg.Add(1)
+	go client.AutoBridgeWalletExcessPeriodically(ctx, wg)
 
 	if client.refreshGasEstimatesInterval > 0 {
 		wg.Add(1)
