@@ -169,7 +169,7 @@ Keep 5 TRB in the wallet (5_000_000 loya), run the check daily at 03:00 UTC, and
 reporterd start \
   --auto-balance-to-keep=5000000 \
   --auto-balance-execution-time=03:00 \
-  --auto-balance-eth-addr=0x6Ec401744008f4B018Ed9A36f76e6629799Ee50E \
+  --auto-balance-eth-addr=0x0000000000000000000000000000000 \
   # ... other required reporter flags (--home, --from, --grpc, --node, etc.)
 ```
 
