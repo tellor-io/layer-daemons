@@ -174,7 +174,7 @@ func (c *Client) WaitForTx(ctx context.Context, hash string) (*cmttypes.ResultTx
 
 	waitedBlockCount := 0
 	for waiting {
-		resp, err := c.cosmosCtx.Client.Tx(ctx, bz, false)
+		resp, err := c.txByHash(ctx, bz)
 		if err != nil {
 			if strings.Contains(err.Error(), "not found") {
 				if waitedBlockCount == 2 {
@@ -216,7 +216,23 @@ func (c *Client) LatestBlockHeight(ctx context.Context) (int64, error) {
 }
 
 func (c *Client) Status(ctx context.Context) (*cmttypes.ResultStatus, error) {
-	return c.cosmosCtx.Client.Status(ctx)
+	var resp *cmttypes.ResultStatus
+	err := c.withRPCFallback(ctx, "status", func(rpcClient client.CometRPC) error {
+		var err error
+		resp, err = rpcClient.Status(ctx)
+		return err
+	})
+	return resp, err
+}
+
+func (c *Client) txByHash(ctx context.Context, hash []byte) (*cmttypes.ResultTx, error) {
+	var resp *cmttypes.ResultTx
+	err := c.withRPCFallback(ctx, "tx lookup", func(rpcClient client.CometRPC) error {
+		var err error
+		resp, err = rpcClient.Tx(ctx, hash, false)
+		return err
+	})
+	return resp, err
 }
 
 func (c *Client) WaitForBlockHeight(ctx context.Context, h int64) error {
@@ -322,7 +338,8 @@ func (c *Client) sendTx(ctx context.Context, queryMetaId uint64, isBridge bool, 
 		}
 
 		changed, from, to := c.gasEstimator.escalateGasLevel(bucket)
-		c.logger.Info("Detected out-of-gas tx response",
+		c.logger.Info(
+			"Detected out-of-gas tx response",
 			"code", txnResponse.TxResult.Code,
 			"bucket", bucket,
 			"attempt", attempt,
@@ -337,7 +354,8 @@ func (c *Client) sendTx(ctx context.Context, queryMetaId uint64, isBridge bool, 
 
 	if spotPriceTx {
 		from, to := c.gasEstimator.setBucketToMaxLevel(bucket)
-		c.logger.Info("Skipping third spot price send attempt after two failures",
+		c.logger.Info(
+			"Skipping third spot price send attempt after two failures",
 			"bucket", bucket,
 			"from", from,
 			"to", to,
@@ -354,8 +372,12 @@ func (c *Client) maxAttemptsForTx(msg sdk.Msg) int {
 }
 
 func (c *Client) sendTxOnce(ctx context.Context, bucket string, msg ...sdk.Msg) (*cmttypes.ResultTx, string, error) {
-	block, err := c.CmtService.GetLatestBlock(ctx, &cmtservice.GetLatestBlockRequest{})
-	if err != nil {
+	var block *cmtservice.GetLatestBlockResponse
+	if err := c.withGRPCFallback(ctx, "latest block lookup", func() error {
+		var err error
+		block, err = c.CmtService.GetLatestBlock(ctx, &cmtservice.GetLatestBlockRequest{})
+		return err
+	}); err != nil {
 		return nil, "", fmt.Errorf("error getting block: %w", err)
 	}
 	txf := newFactory(c.cosmosCtx)
@@ -368,6 +390,7 @@ func (c *Client) sendTxOnce(ctx context.Context, bucket string, msg ...sdk.Msg) 
 		WithTimeoutHeight(uint64(block.SdkBlock.Header.Height + 2)).
 		WithUnordered(true).
 		WithTimeoutTimestamp(c.GetUniqueUnorderedTimeout())
+	var err error
 	txf, err = txf.Prepare(c.cosmosCtx)
 	if err != nil {
 		return nil, "", fmt.Errorf("error preparing transaction factory: %w", err)
@@ -388,7 +411,7 @@ func (c *Client) sendTxOnce(ctx context.Context, bucket string, msg ...sdk.Msg) 
 	if err != nil {
 		return nil, "", fmt.Errorf("error encoding transaction: %w", err)
 	}
-	res, err := c.cosmosCtx.BroadcastTx(txBytes)
+	res, err := c.broadcastTxWithFallback(ctx, txBytes)
 	if err := handleBroadcastResult(res, err); err != nil {
 		return nil, "", fmt.Errorf("error broadcasting transaction result: %w", err)
 	}
@@ -407,9 +430,63 @@ func (c *Client) sendTxOnce(ctx context.Context, bucket string, msg ...sdk.Msg) 
 	return txnResponse, res.TxHash, nil
 }
 
-func (c *Client) SetGasPrice(ctx context.Context) error {
-	gfResponse, err := c.GlobalfeeClient.MinimumGasPrices(ctx, &globalfeetypes.QueryMinimumGasPricesRequest{})
+func (c *Client) broadcastTxWithFallback(ctx context.Context, txBytes []byte) (*sdk.TxResponse, error) {
+	var resp *sdk.TxResponse
+	err := c.withRPCFallback(ctx, "broadcast tx", func(rpcClient client.CometRPC) error {
+		clientCtx := c.cosmosCtx.WithClient(rpcClient)
+		var err error
+		resp, err = clientCtx.BroadcastTx(txBytes)
+		return err
+	})
+	return resp, err
+}
+
+func (c *Client) withRPCFallback(ctx context.Context, operation string, call func(client.CometRPC) error) error {
+	if c.rpcManager == nil {
+		return call(c.cosmosCtx.Client)
+	}
+
+	rpcClient, endpoint, err := c.rpcManager.currentClient()
 	if err != nil {
+		c.logger.Warn("Failed to create current CometBFT RPC client, trying fallback endpoint", "operation", operation, "endpoint", endpoint, "error", err)
+		rpcClient, endpoint, err = c.rpcManager.nextClient()
+		if err != nil {
+			return fmt.Errorf("create RPC client: %w", err)
+		}
+	}
+
+	err = call(rpcClient)
+	if !shouldFallbackRPCError(ctx, err) {
+		return err
+	}
+
+	lastErr := err
+	for attempt := 0; attempt < c.rpcManager.endpointCount()-1; attempt++ {
+		c.logger.Warn("CometBFT RPC operation failed, trying fallback endpoint", "operation", operation, "endpoint", endpoint, "error", lastErr)
+		rpcClient, endpoint, err = c.rpcManager.nextClient()
+		if err != nil {
+			return fmt.Errorf("%s failed on RPC endpoints: %w; last error: %w", operation, err, lastErr)
+		}
+
+		err = call(rpcClient)
+		if err == nil {
+			return nil
+		}
+		if !shouldFallbackRPCError(ctx, err) {
+			return err
+		}
+		lastErr = err
+	}
+	return fmt.Errorf("%s failed on all RPC endpoints: %w", operation, lastErr)
+}
+
+func (c *Client) SetGasPrice(ctx context.Context) error {
+	var gfResponse *globalfeetypes.QueryMinimumGasPricesResponse
+	if err := c.withGRPCFallback(ctx, "minimum gas prices lookup", func() error {
+		var err error
+		gfResponse, err = c.GlobalfeeClient.MinimumGasPrices(ctx, &globalfeetypes.QueryMinimumGasPricesRequest{})
+		return err
+	}); err != nil {
 		return fmt.Errorf("getting minimum gas price (globalfee): %w", err)
 	}
 	localPrice, err := sdk.ParseDecCoins(c.minGasFee)

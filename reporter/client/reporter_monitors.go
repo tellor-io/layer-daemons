@@ -147,14 +147,19 @@ func (c *Client) MonitorForTippedQueries(ctx context.Context, wg *sync.WaitGroup
 			return
 		case <-ticker.C:
 			queryCtx, cancel := context.WithTimeout(ctx, defaultQueryTimeout)
-			res, err := c.OracleQueryClient.TippedQueriesForDaemon(queryCtx, &oracletypes.QueryTippedQueriesForDaemonRequest{
-				Pagination: &query.PageRequest{
-					Offset: 0,
-				},
+			var res *oracletypes.QueryTippedQueriesForDaemonResponse
+			err := c.withGRPCFallback(queryCtx, "tipped queries lookup", func() error {
+				var err error
+				res, err = c.OracleQueryClient.TippedQueriesForDaemon(queryCtx, &oracletypes.QueryTippedQueriesForDaemonRequest{
+					Pagination: &query.PageRequest{
+						Offset: 0,
+					},
+				})
+				return err
 			})
 			cancel()
 
-			if err != nil || len(res.Queries) == 0 {
+			if err != nil || res == nil || len(res.Queries) == 0 {
 				if err != nil {
 					// Exponential backoff on error
 					retryDelay *= 2
@@ -172,7 +177,7 @@ func (c *Client) MonitorForTippedQueries(ctx context.Context, wg *sync.WaitGroup
 				ticker.Reset(retryDelay)
 			}
 
-			status, err := c.cosmosCtx.Client.Status(ctx)
+			status, err := c.Status(ctx)
 			if err != nil {
 				continue
 			}
@@ -303,8 +308,13 @@ func (c *Client) AutoUnbondStakePeriodically(ctx context.Context, wg *sync.WaitG
 			return
 		case <-ticker.C:
 			c.logger.Info("Trying to unbond stake")
-			reporterData, err := c.ReporterClient.SelectionsTo(ctx, &reportertypes.QuerySelectionsToRequest{
-				ReporterAddress: c.accAddr.String(),
+			var reporterData *reportertypes.QuerySelectionsToResponse
+			err := c.withGRPCFallback(ctx, "reporter selections lookup", func() error {
+				var err error
+				reporterData, err = c.ReporterClient.SelectionsTo(ctx, &reportertypes.QuerySelectionsToRequest{
+					ReporterAddress: c.accAddr.String(),
+				})
+				return err
 			})
 			if err != nil {
 				c.logger.Error("error getting reporter data", "error", err)
@@ -384,9 +394,14 @@ func (c *Client) AutoBridgeWalletExcessPeriodically(ctx context.Context, wg *syn
 
 		c.logger.Info("Auto balance-to-keep: checking wallet balance")
 
-		balResp, err := c.BankClient.Balance(ctx, &banktypes.QueryBalanceRequest{
-			Address: c.accAddr.String(),
-			Denom:   "loya",
+		var balResp *banktypes.QueryBalanceResponse
+		err = c.withGRPCFallback(ctx, "wallet balance lookup", func() error {
+			var err error
+			balResp, err = c.BankClient.Balance(ctx, &banktypes.QueryBalanceRequest{
+				Address: c.accAddr.String(),
+				Denom:   "loya",
+			})
+			return err
 		})
 		if err != nil {
 			c.logger.Error("auto balance-to-keep: failed to query wallet balance", "error", err)

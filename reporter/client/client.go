@@ -10,7 +10,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	rpchttp "github.com/cometbft/cometbft/rpc/client/http"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/spf13/viper"
 	globalfeetypes "github.com/strangelove-ventures/globalfee/x/globalfee/types"
@@ -36,7 +35,11 @@ import (
 	banktypes "github.com/cosmos/cosmos-sdk/x/bank/types"
 )
 
-const defaultGas = uint64(240000)
+const (
+	defaultGas                   = uint64(240000)
+	primaryEndpointCheckInterval = 5 * time.Minute
+	primaryEndpointProbeTimeout  = 10 * time.Second
+)
 
 var (
 	commitedIds   = make(map[uint64]bool)
@@ -85,8 +88,12 @@ type Client struct {
 	gasEstimator                *gasEstimateState
 
 	// Resources that need cleanup
+	grpcMu      sync.RWMutex
 	grpcConn    *grpc.ClientConn
 	grpcClient  daemontypes.GrpcClient
+	grpcManager *grpcEndpointManager
+	rpcManager  *rpcEndpointManager
+
 	wg          sync.WaitGroup
 	broadcastWg sync.WaitGroup // Tracks goroutines in BroadcastTxMsgToChain
 	stopOnce    sync.Once
@@ -125,7 +132,7 @@ func NewClient(logger log.Logger, valGasMin string) *Client {
 func (c *Client) Start(
 	ctx context.Context,
 	flags daemonflags.DaemonFlags,
-	grpcAddress string,
+	grpcEndpoints []string,
 	grpcClient daemontypes.GrpcClient,
 	marketParams []pricefeedtypes.MarketParam,
 	marketToExchange *pricefeedservertypes.MarketToExchangePrices,
@@ -133,6 +140,7 @@ func (c *Client) Start(
 	tokenBridgeTipsCache *tokenbridgetipstypes.DepositTips,
 	custom_queries map[string]customquery.QueryConfig,
 	chainId string,
+	rpcEndpoints []string,
 ) error {
 	// Log the daemon flags.
 	c.logger.Info(
@@ -146,30 +154,20 @@ func (c *Client) Start(
 	c.TokenDepositsCache = tokenDepositsCache
 	c.TokenBridgeTipsCache = tokenBridgeTipsCache
 	c.Custom_query = custom_queries
-	// Make a connection to the Cosmos gRPC query services.
-	c.logger.Info("Establishing gRPC connection", "address", grpcAddress)
-	conn, err := grpcClient.NewTcpConnection(ctx, grpcAddress)
+	grpcManager, err := newGRPCEndpointManager(grpcEndpoints, c.logger, grpcClient)
 	if err != nil {
-		c.logger.Error("Failed to establish gRPC connection to Cosmos gRPC query services", "error", err, "address", grpcAddress)
-		return err
+		return fmt.Errorf("failed to initialize gRPC endpoint manager: %w", err)
 	}
-	c.logger.Info("gRPC connection established successfully", "address", grpcAddress)
-	// Store connection and grpcClient for cleanup
-	c.grpcConn = conn
+	c.grpcManager = grpcManager
 	c.grpcClient = grpcClient
 
-	// Initialize the query clients. These are used to query the Cosmos gRPC query services.
-	c.OracleQueryClient = oracletypes.NewQueryClient(conn)
-	c.BankClient = banktypes.NewQueryClient(conn)
-	c.ReporterClient = reportertypes.NewQueryClient(conn)
-	c.GlobalfeeClient = globalfeetypes.NewQueryClient(conn)
-	c.CmtService = cmtservice.NewServiceClient(conn)
-	c.AuthClient = authtypes.NewQueryClient(conn)
+	if err := c.connectInitialGRPCEndpoint(ctx); err != nil {
+		return err
+	}
 
 	keyName := viper.GetString("from")
 	homeDir := viper.GetString("home")
 	brdcstMode := viper.GetString("broadcast-mode")
-	nodeUri := viper.GetString("node")
 	kb := viper.GetString("keyring-backend")
 
 	// Read price guard config
@@ -230,7 +228,8 @@ func (c *Client) Start(
 
 	// Log price guard configuration
 	if priceGuardEnabled {
-		c.logger.Info("Price guard enabled",
+		c.logger.Info(
+			"Price guard enabled",
 			"threshold", fmt.Sprintf("%.5f%%", priceGuardThreshold*100),
 			"max_age", priceGuardMaxAge.String(),
 			"update_on_blocked", updateOnBlocked,
@@ -240,7 +239,8 @@ func (c *Client) Start(
 	}
 
 	if autoUnbondingFrequency > 0 {
-		c.logger.Info("Auto unbonding enabled",
+		c.logger.Info(
+			"Auto unbonding enabled",
 			"frequency", autoUnbondingFrequency,
 			"amount", autoUnbondingAmount,
 			"max_stake_percentage", autoUnbondingMaxStakePercentage,
@@ -262,7 +262,8 @@ func (c *Client) Start(
 		if _, _, err := parseAutoBalanceExecutionTime(viper.GetString(daemonflags.FlagAutoBalanceExecutionTime)); err != nil {
 			return err
 		}
-		c.logger.Info("Auto balance-to-keep enabled",
+		c.logger.Info(
+			"Auto balance-to-keep enabled",
 			"balance_to_keep_loya", autoBalanceToKeep,
 			"execution_time", viper.GetString(daemonflags.FlagAutoBalanceExecutionTime),
 			"eth_addr", "0x"+autoBalanceEthAddr,
@@ -280,14 +281,19 @@ func (c *Client) Start(
 	c.cosmosCtx = c.cosmosCtx.WithChainID(chainId)
 	c.cosmosCtx = c.cosmosCtx.WithHomeDir(homeDir)
 	c.cosmosCtx = c.cosmosCtx.WithKeyringDir(homeDir)
-	c.cosmosCtx = c.cosmosCtx.WithGRPCClient(conn)
 	c.cosmosCtx = c.cosmosCtx.WithBroadcastMode(brdcstMode)
 	c.cosmosCtx = c.cosmosCtx.WithAccountRetriever(authtypes.AccountRetriever{})
 
-	rpcClient, err := rpchttp.New(nodeUri, "/websocket")
+	rpcManager, err := newRPCEndpointManager(rpcEndpoints, c.logger)
+	if err != nil {
+		return fmt.Errorf("failed to initialize RPC endpoint manager: %w", err)
+	}
+	rpcClient, rpcEndpoint, err := rpcManager.currentClient()
 	if err != nil {
 		return fmt.Errorf("failed to create RPC client: %w", err)
 	}
+	c.logger.Info("CometBFT RPC client established", "endpoint", rpcEndpoint)
+	c.rpcManager = rpcManager
 	c.cosmosCtx = c.cosmosCtx.WithClient(rpcClient)
 
 	encodingConfig := CreateEncodingConfig()
@@ -318,6 +324,200 @@ func (c *Client) Start(
 	)
 
 	return nil
+}
+
+func (c *Client) connectInitialGRPCEndpoint(ctx context.Context) error {
+	c.logger.Info("Establishing gRPC connection", "endpoint", c.grpcManager.currentEndpoint())
+	conn, endpoint, err := c.grpcManager.currentConnection(ctx)
+	if err != nil {
+		c.logger.Warn("Failed to establish gRPC connection, trying fallback endpoint", "endpoint", endpoint, "error", err)
+		for attempt := 0; attempt < c.grpcManager.endpointCount()-1; attempt++ {
+			conn, endpoint, err = c.grpcManager.nextConnection(ctx)
+			if err == nil {
+				break
+			}
+		}
+		if err != nil {
+			return fmt.Errorf("failed to establish gRPC connection to Cosmos query services: %w", err)
+		}
+	}
+
+	c.setGRPCConnection(conn)
+	c.logger.Info("gRPC connection established successfully", "endpoint", endpoint)
+	return nil
+}
+
+func (c *Client) setGRPCConnection(conn *grpc.ClientConn) {
+	c.grpcConn = conn
+	c.cosmosCtx = c.cosmosCtx.WithGRPCClient(conn)
+
+	// Rebuild all generated clients so subsequent queries use the active connection.
+	c.OracleQueryClient = oracletypes.NewQueryClient(conn)
+	c.BankClient = banktypes.NewQueryClient(conn)
+	c.ReporterClient = reportertypes.NewQueryClient(conn)
+	c.GlobalfeeClient = globalfeetypes.NewQueryClient(conn)
+	c.CmtService = cmtservice.NewServiceClient(conn)
+	c.AuthClient = authtypes.NewQueryClient(conn)
+}
+
+func (c *Client) withGRPCQueryClient(call func() error) error {
+	c.grpcMu.RLock()
+	defer c.grpcMu.RUnlock()
+	return call()
+}
+
+func (c *Client) reconnectGRPCEndpoint(ctx context.Context, operation string, lastErr error) error {
+	c.grpcMu.Lock()
+	defer c.grpcMu.Unlock()
+
+	oldConn := c.grpcConn
+	c.logger.Warn(
+		"Cosmos gRPC operation failed, trying fallback endpoint",
+		"operation", operation,
+		"endpoint", c.grpcManager.currentEndpoint(),
+		"error", lastErr,
+	)
+
+	conn, endpoint, err := c.grpcManager.nextConnection(ctx)
+	if err != nil {
+		return err
+	}
+	c.setGRPCConnection(conn)
+
+	if oldConn != nil && c.grpcClient != nil {
+		if err := c.grpcClient.CloseConnection(oldConn); err != nil {
+			c.logger.Warn("Failed to close previous gRPC connection", "error", err)
+		}
+	}
+	c.logger.Info("Cosmos gRPC connection re-established", "endpoint", endpoint)
+	return nil
+}
+
+func (c *Client) withGRPCFallback(ctx context.Context, operation string, call func() error) error {
+	err := c.withGRPCQueryClient(call)
+	if !shouldFallbackGRPCError(ctx, err) || c.grpcManager == nil {
+		return err
+	}
+
+	lastErr := err
+	for attempt := 0; attempt < c.grpcManager.endpointCount()-1; attempt++ {
+		if err := c.reconnectGRPCEndpoint(ctx, operation, lastErr); err != nil {
+			return fmt.Errorf("%s failed on gRPC endpoints: %w; last error: %w", operation, err, lastErr)
+		}
+
+		err = c.withGRPCQueryClient(call)
+		if err == nil {
+			return nil
+		}
+		if !shouldFallbackGRPCError(ctx, err) {
+			return err
+		}
+		lastErr = err
+	}
+
+	return fmt.Errorf("%s failed on all gRPC endpoints: %w", operation, lastErr)
+}
+
+func (c *Client) RestorePrimaryEndpointsPeriodically(ctx context.Context, wg *sync.WaitGroup) {
+	defer wg.Done()
+
+	ticker := time.NewTicker(primaryEndpointCheckInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			c.tryRestorePrimaryRPCEndpoint(ctx)
+			c.tryRestorePrimaryGRPCEndpoint(ctx)
+		}
+	}
+}
+
+func (c *Client) tryRestorePrimaryRPCEndpoint(ctx context.Context) {
+	if c.rpcManager == nil || c.rpcManager.usingPrimary() {
+		return
+	}
+
+	probeCtx, cancel := context.WithTimeout(ctx, primaryEndpointProbeTimeout)
+	defer cancel()
+
+	rpcClient, endpoint, err := c.rpcManager.primaryClient()
+	if err != nil {
+		c.logger.Warn("Primary CometBFT RPC endpoint is not ready", "endpoint", endpoint, "error", err)
+		return
+	}
+	status, err := rpcClient.Status(probeCtx)
+	if err != nil {
+		c.logger.Warn("Primary CometBFT RPC endpoint health check failed", "endpoint", endpoint, "error", err)
+		return
+	}
+	if status.NodeInfo.Network != c.cosmosCtx.ChainID {
+		c.logger.Warn(
+			"Primary CometBFT RPC endpoint returned unexpected chain ID",
+			"endpoint", endpoint,
+			"expected_chain_id", c.cosmosCtx.ChainID,
+			"actual_chain_id", status.NodeInfo.Network,
+		)
+		return
+	}
+
+	c.rpcManager.switchToPrimary()
+}
+
+func (c *Client) tryRestorePrimaryGRPCEndpoint(ctx context.Context) {
+	if c.grpcManager == nil || c.grpcManager.usingPrimary() {
+		return
+	}
+
+	probeCtx, cancel := context.WithTimeout(ctx, primaryEndpointProbeTimeout)
+	defer cancel()
+
+	conn, endpoint, err := c.grpcManager.primaryConnection(probeCtx)
+	if err != nil {
+		c.logger.Warn("Primary Cosmos gRPC endpoint is not ready", "endpoint", endpoint, "error", err)
+		return
+	}
+
+	resp, err := cmtservice.NewServiceClient(conn).GetNodeInfo(probeCtx, &cmtservice.GetNodeInfoRequest{})
+	if err != nil {
+		c.closeGRPCConnection(conn)
+		c.logger.Warn("Primary Cosmos gRPC endpoint health check failed", "endpoint", endpoint, "error", err)
+		return
+	}
+	if resp.DefaultNodeInfo.Network != c.cosmosCtx.ChainID {
+		c.closeGRPCConnection(conn)
+		c.logger.Warn(
+			"Primary Cosmos gRPC endpoint returned unexpected chain ID",
+			"endpoint", endpoint,
+			"expected_chain_id", c.cosmosCtx.ChainID,
+			"actual_chain_id", resp.DefaultNodeInfo.Network,
+		)
+		return
+	}
+
+	c.grpcMu.Lock()
+	if c.grpcManager.usingPrimary() {
+		c.grpcMu.Unlock()
+		c.closeGRPCConnection(conn)
+		return
+	}
+	oldConn := c.grpcConn
+	c.setGRPCConnection(conn)
+	c.grpcManager.switchToPrimary()
+	c.grpcMu.Unlock()
+
+	c.closeGRPCConnection(oldConn)
+}
+
+func (c *Client) closeGRPCConnection(conn *grpc.ClientConn) {
+	if conn == nil || c.grpcClient == nil {
+		return
+	}
+	if err := c.grpcClient.CloseConnection(conn); err != nil {
+		c.logger.Warn("Failed to close gRPC connection", "error", err)
+	}
 }
 
 func StartReporterDaemonTaskLoop(
@@ -351,6 +551,9 @@ func StartReporterDaemonTaskLoop(
 			client.logger.Warn("Reporter not found, retrying...", "selector_address", client.accAddr.String())
 		}
 	}
+
+	wg.Add(1)
+	go client.RestorePrimaryEndpointsPeriodically(ctx, wg)
 
 	select {
 	case <-ctx.Done():
@@ -427,7 +630,12 @@ func (c *Client) checkReporter(ctx context.Context) bool {
 		}
 
 		// First try to check if the address is a reporter directly
-		reporterResp, err := c.ReporterClient.Reporter(ctx, &reportertypes.QueryReporterRequest{ReporterAddress: c.accAddr.String()})
+		var reporterResp *reportertypes.QueryReporterResponse
+		err := c.withGRPCFallback(ctx, "reporter lookup", func() error {
+			var err error
+			reporterResp, err = c.ReporterClient.Reporter(ctx, &reportertypes.QueryReporterRequest{ReporterAddress: c.accAddr.String()})
+			return err
+		})
 		if err == nil {
 			c.logger.Info("Reporter found (direct)", "address", c.accAddr.String(), "reporter", reporterResp)
 			return true
@@ -441,7 +649,12 @@ func (c *Client) checkReporter(ctx context.Context) bool {
 
 		c.logger.Debug("Direct reporter check failed, trying selector", "error", err, "address", c.accAddr.String())
 		// If not a reporter, check if it's a selector that has selected a reporter
-		selectorResp, err := c.ReporterClient.SelectorReporter(ctx, &reportertypes.QuerySelectorReporterRequest{SelectorAddress: c.accAddr.String()})
+		var selectorResp *reportertypes.QuerySelectorReporterResponse
+		err = c.withGRPCFallback(ctx, "selector reporter lookup", func() error {
+			var err error
+			selectorResp, err = c.ReporterClient.SelectorReporter(ctx, &reportertypes.QuerySelectorReporterRequest{SelectorAddress: c.accAddr.String()})
+			return err
+		})
 		if err == nil {
 			c.logger.Info("Reporter found (via selector)", "address", c.accAddr.String(), "reporter", selectorResp.Reporter)
 			return true
@@ -527,6 +740,8 @@ func (c *Client) Stop() {
 		c.broadcastWg.Wait()
 
 		// Close gRPC connection
+		c.grpcMu.Lock()
+		defer c.grpcMu.Unlock()
 		if c.grpcConn != nil && c.grpcClient != nil {
 			if err := c.grpcClient.CloseConnection(c.grpcConn); err != nil {
 				c.logger.Error("Failed to close gRPC connection", "error", err)

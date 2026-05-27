@@ -57,20 +57,28 @@ var rootCmd = &cobra.Command{
 		}
 
 		// Normal daemon mode - validate required flags
-		grpcAddr := viper.GetString(flags.FlagGRPC)
+		grpcCfg, err := grpcEndpointsFromEnvOrFlag(viper.GetString(flags.FlagGRPC))
+		if err != nil {
+			fmt.Printf("Error: %v\n", err)
+			os.Exit(1)
+		}
 		from := viper.GetString(flags.FlagFrom)
-		node := viper.GetString(flags.FlagNode)
+		rpcCfg, err := rpcEndpointsFromEnvOrFlag(viper.GetString(flags.FlagNode))
+		if err != nil {
+			fmt.Printf("Error: %v\n", err)
+			os.Exit(1)
+		}
 
-		if grpcAddr == "" {
-			fmt.Printf("Error: --grpc is required in reporter mode\n")
+		if len(grpcCfg.Endpoints) == 0 {
+			fmt.Printf("Error: %s or --%s is required in reporter mode\n", envGRPCNodes, flags.FlagGRPC)
 			os.Exit(1)
 		}
 		if from == "" {
 			fmt.Printf("Error: --from is required in reporter mode\n")
 			os.Exit(1)
 		}
-		if node == "" {
-			fmt.Printf("Error: --node is required in reporter mode\n")
+		if len(rpcCfg.Endpoints) == 0 {
+			fmt.Printf("Error: %s or --%s is required in reporter mode\n", envRPCNodes, flags.FlagNode)
 			os.Exit(1)
 		}
 
@@ -78,15 +86,30 @@ var rootCmd = &cobra.Command{
 		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 		defer stop()
 
-		chainId, err := detectChainID(ctx, grpcAddr, node)
+		chainId, grpcAddr, selectedRPCNode, err := detectChainIDFromEndpoints(ctx, grpcCfg.Endpoints, rpcCfg.Endpoints)
 		if err != nil {
 			fmt.Printf("Error: could not detect chain ID: %v\n", err)
 			os.Exit(1)
 		}
-		logger.Info("Detected chain ID", "chain_id", chainId)
+		logger.Info(
+			"Detected chain ID",
+			"chain_id", chainId,
+			"grpc_endpoint", grpcAddr,
+			"grpc_source", grpcCfg.Source,
+			"rpc_endpoint", selectedRPCNode,
+			"rpc_source", rpcCfg.Source,
+		)
 
 		// Pass prometheusPort and signal context to NewApp
-		appInstance := daemons.NewApp(ctx, logger, chainId, grpcAddr, homePath, prometheusPort)
+		appInstance := daemons.NewApp(
+			ctx,
+			logger,
+			chainId,
+			moveEndpointToFront(grpcCfg.Endpoints, grpcAddr),
+			moveEndpointToFront(rpcCfg.Endpoints, selectedRPCNode),
+			homePath,
+			prometheusPort,
+		)
 
 		// Wait for signal
 		<-ctx.Done()
