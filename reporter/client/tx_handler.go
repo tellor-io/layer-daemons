@@ -433,7 +433,7 @@ func (c *Client) sendTxOnce(ctx context.Context, bucket string, msg ...sdk.Msg) 
 func (c *Client) broadcastTxWithFallback(ctx context.Context, txBytes []byte) (*sdk.TxResponse, error) {
 	var resp *sdk.TxResponse
 	err := c.withRPCFallback(ctx, "broadcast tx", func(rpcClient client.CometRPC) error {
-		clientCtx := c.cosmosCtx.WithClient(rpcClient)
+		clientCtx := c.rpcContextWithClient(rpcClient)
 		var err error
 		resp, err = clientCtx.BroadcastTx(txBytes)
 		return err
@@ -453,6 +453,7 @@ func (c *Client) withRPCFallback(ctx context.Context, operation string, call fun
 		if err != nil {
 			return fmt.Errorf("create RPC client: %w", err)
 		}
+		c.setRPCClient(rpcClient)
 	}
 
 	err = call(rpcClient)
@@ -467,6 +468,7 @@ func (c *Client) withRPCFallback(ctx context.Context, operation string, call fun
 		if err != nil {
 			return fmt.Errorf("%s failed on RPC endpoints: %w; last error: %w", operation, err, lastErr)
 		}
+		c.setRPCClient(rpcClient)
 
 		err = call(rpcClient)
 		if err == nil {

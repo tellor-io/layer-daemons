@@ -92,6 +92,7 @@ type Client struct {
 	grpcConn    *grpc.ClientConn
 	grpcClient  daemontypes.GrpcClient
 	grpcManager *grpcEndpointManager
+	rpcMu       sync.RWMutex
 	rpcManager  *rpcEndpointManager
 
 	wg          sync.WaitGroup
@@ -294,7 +295,7 @@ func (c *Client) Start(
 	}
 	c.logger.Info("CometBFT RPC client established", "endpoint", rpcEndpoint)
 	c.rpcManager = rpcManager
-	c.cosmosCtx = c.cosmosCtx.WithClient(rpcClient)
+	c.setRPCClient(rpcClient)
 
 	encodingConfig := CreateEncodingConfig()
 	c.cosmosCtx = c.cosmosCtx.WithCodec(encodingConfig.Codec).WithInterfaceRegistry(encodingConfig.InterfaceRegistry).WithTxConfig(encodingConfig.TxConfig)
@@ -463,6 +464,7 @@ func (c *Client) tryRestorePrimaryRPCEndpoint(ctx context.Context) {
 		return
 	}
 
+	c.setRPCClient(rpcClient)
 	c.rpcManager.switchToPrimary()
 }
 
@@ -518,6 +520,18 @@ func (c *Client) closeGRPCConnection(conn *grpc.ClientConn) {
 	if err := c.grpcClient.CloseConnection(conn); err != nil {
 		c.logger.Warn("Failed to close gRPC connection", "error", err)
 	}
+}
+
+func (c *Client) setRPCClient(rpcClient client.CometRPC) {
+	c.rpcMu.Lock()
+	defer c.rpcMu.Unlock()
+	c.cosmosCtx = c.cosmosCtx.WithClient(rpcClient)
+}
+
+func (c *Client) rpcContextWithClient(rpcClient client.CometRPC) client.Context {
+	c.rpcMu.RLock()
+	defer c.rpcMu.RUnlock()
+	return c.cosmosCtx.WithClient(rpcClient)
 }
 
 func StartReporterDaemonTaskLoop(
