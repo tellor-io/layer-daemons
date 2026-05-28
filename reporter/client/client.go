@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -33,11 +34,14 @@ import (
 	"github.com/cosmos/cosmos-sdk/client/grpc/cmtservice"
 	"github.com/cosmos/cosmos-sdk/crypto/keyring"
 	sdk "github.com/cosmos/cosmos-sdk/types"
+	signingtypes "github.com/cosmos/cosmos-sdk/types/tx/signing"
 	authtypes "github.com/cosmos/cosmos-sdk/x/auth/types"
 	banktypes "github.com/cosmos/cosmos-sdk/x/bank/types"
 )
 
 const defaultGas = uint64(240000)
+
+var ErrKeyringPasswordFile = errors.New("keyring password file validation failed")
 
 var (
 	commitedIds   = make(map[uint64]bool)
@@ -49,20 +53,45 @@ var (
 
 var mutex = &sync.RWMutex{}
 
+// IsKeyringPasswordFileError reports whether startup failed while validating
+// KEYRING_PASSWORD_FILE or the account it is expected to unlock.
+func IsKeyringPasswordFileError(err error) bool {
+	return errors.Is(err, ErrKeyringPasswordFile)
+}
+
 // keyringReader returns an io.Reader for the keyring passphrase.
 // If KEYRING_PASSWORD_FILE is set, it reads the password from that file.
 // Otherwise it falls back to stdin for interactive use.
-func keyringReader() io.Reader {
-	if passFile := os.Getenv("KEYRING_PASSWORD_FILE"); passFile != "" {
-		data, err := os.ReadFile(passFile)
-		if err == nil {
-			pass := strings.TrimSpace(string(data))
-			if pass != "" {
-				return strings.NewReader(pass + "\n" + pass + "\n" + pass + "\n")
-			}
-		}
+func keyringReader() (io.Reader, bool, error) {
+	passFile := os.Getenv("KEYRING_PASSWORD_FILE")
+	if passFile == "" {
+		return os.Stdin, false, nil
 	}
-	return os.Stdin
+
+	data, err := os.ReadFile(passFile)
+	if err != nil {
+		return nil, true, fmt.Errorf("%w: could not read KEYRING_PASSWORD_FILE %q: %v", ErrKeyringPasswordFile, passFile, err)
+	}
+	pass := strings.TrimSpace(string(data))
+	if pass == "" {
+		return nil, true, fmt.Errorf("%w: KEYRING_PASSWORD_FILE %q is empty", ErrKeyringPasswordFile, passFile)
+	}
+
+	// The file backend may ask for the passphrase more than once while opening
+	// and signing. Keep a buffered set of answers available for startup and the
+	// first broadcasts without falling back to interactive stdin.
+	return strings.NewReader(strings.Repeat(pass+"\n", 64)), true, nil
+}
+
+func validateKeyringAccountUnlocked(kr keyring.Keyring, keyName string) error {
+	sig, pubKey, err := kr.Sign(keyName, []byte("layer-daemons keyring unlock check"), signingtypes.SignMode_SIGN_MODE_DIRECT)
+	if err != nil {
+		return fmt.Errorf("%w: account %q could not be unlocked with KEYRING_PASSWORD_FILE: %v", ErrKeyringPasswordFile, keyName, err)
+	}
+	if len(sig) == 0 || pubKey == nil {
+		return fmt.Errorf("%w: account %q did not return a valid unlock signature", ErrKeyringPasswordFile, keyName)
+	}
+	return nil
 }
 
 type TxChannelInfo struct {
@@ -310,17 +339,33 @@ func (c *Client) Start(
 	encodingConfig := CreateEncodingConfig()
 	c.cosmosCtx = c.cosmosCtx.WithCodec(encodingConfig.Codec).WithInterfaceRegistry(encodingConfig.InterfaceRegistry).WithTxConfig(encodingConfig.TxConfig)
 
-	kr, err := keyring.New("", kb, homeDir, keyringReader(), encodingConfig.Codec)
+	keyringInput, usingPasswordFile, err := keyringReader()
 	if err != nil {
+		return err
+	}
+	kr, err := keyring.New("", kb, homeDir, keyringInput, encodingConfig.Codec)
+	if err != nil {
+		if usingPasswordFile {
+			return fmt.Errorf("%w: could not initialize keyring backend %q: %v", ErrKeyringPasswordFile, kb, err)
+		}
 		return err
 	}
 	record, err := kr.Key(keyName)
 	if err != nil {
+		if usingPasswordFile {
+			return fmt.Errorf("%w: account %q could not be read from keyring backend %q: %v", ErrKeyringPasswordFile, keyName, kb, err)
+		}
 		return err
 	}
 	addr, err := record.GetAddress()
 	if err != nil {
 		return err
+	}
+	if usingPasswordFile {
+		if err := validateKeyringAccountUnlocked(kr, keyName); err != nil {
+			return err
+		}
+		c.logger.Info("KEYRING_PASSWORD_FILE unlocked keyring account successfully", "account", keyName, "address", addr.String())
 	}
 
 	c.cosmosCtx = c.cosmosCtx.WithKeyring(kr)

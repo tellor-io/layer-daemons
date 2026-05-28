@@ -171,6 +171,9 @@ func NewApp(
 			chainId,
 		); err != nil {
 			logger.Error("Reporter client failed to start", "error", err)
+			if reporterclient.IsKeyringPasswordFileError(err) {
+				os.Exit(1)
+			}
 		}
 	}()
 
