@@ -18,7 +18,6 @@ import (
 	"github.com/tellor-io/layer-daemons/configs"
 	customquery "github.com/tellor-io/layer-daemons/custom_query"
 	daemonflags "github.com/tellor-io/layer-daemons/flags"
-
 	// need this for the address bech32 prefix config
 	_ "github.com/tellor-io/layer/app/config"
 

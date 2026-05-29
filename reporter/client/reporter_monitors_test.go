@@ -3,8 +3,9 @@ package client
 import (
 	"testing"
 
-	"github.com/cosmos/cosmos-sdk/types/bech32"
 	"github.com/stretchr/testify/require"
+
+	"github.com/cosmos/cosmos-sdk/types/bech32"
 )
 
 func TestValidatorOperatorAddressDerivesFromReporterWhenUnset(t *testing.T) {

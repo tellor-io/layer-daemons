@@ -54,7 +54,6 @@ func TestKeyringReaderPasswordFile(t *testing.T) {
 		t.Setenv("KEYRING_PASSWORD_FILE", passFile)
 
 		reader, usingPasswordFile, err := keyringReader()
-
 		if err != nil {
 			t.Fatalf("expected no error, got %v", err)
 		}

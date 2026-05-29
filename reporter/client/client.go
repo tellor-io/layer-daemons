@@ -96,7 +96,7 @@ func keyringReader() (io.Reader, bool, error) {
 
 	data, err := os.ReadFile(passFile)
 	if err != nil {
-		return nil, true, fmt.Errorf("%w: could not read KEYRING_PASSWORD_FILE %q: %v", ErrKeyringPasswordFile, passFile, err)
+		return nil, true, fmt.Errorf("%w: could not read KEYRING_PASSWORD_FILE %q: %w", ErrKeyringPasswordFile, passFile, err)
 	}
 	pass := strings.TrimSpace(string(data))
 	if pass == "" {
@@ -111,7 +111,7 @@ func keyringReader() (io.Reader, bool, error) {
 func validateKeyringAccountUnlocked(kr keyring.Keyring, keyName string) error {
 	sig, pubKey, err := kr.Sign(keyName, []byte("layer-daemons keyring unlock check"), signingtypes.SignMode_SIGN_MODE_DIRECT)
 	if err != nil {
-		return fmt.Errorf("%w: account %q could not be unlocked with KEYRING_PASSWORD_FILE: %v", ErrKeyringPasswordFile, keyName, err)
+		return fmt.Errorf("%w: account %q could not be unlocked with KEYRING_PASSWORD_FILE: %w", ErrKeyringPasswordFile, keyName, err)
 	}
 	if len(sig) == 0 || pubKey == nil {
 		return fmt.Errorf("%w: account %q did not return a valid unlock signature", ErrKeyringPasswordFile, keyName)
@@ -378,14 +378,14 @@ func (c *Client) Start(
 	kr, err := keyring.New("", kb, homeDir, keyringInput, encodingConfig.Codec)
 	if err != nil {
 		if usingPasswordFile {
-			return fmt.Errorf("%w: could not initialize keyring backend %q: %v", ErrKeyringPasswordFile, kb, err)
+			return fmt.Errorf("%w: could not initialize keyring backend %q: %w", ErrKeyringPasswordFile, kb, err)
 		}
 		return err
 	}
 	record, err := kr.Key(keyName)
 	if err != nil {
 		if usingPasswordFile {
-			return fmt.Errorf("%w: account %q could not be read from keyring backend %q: %v", ErrKeyringPasswordFile, keyName, kb, err)
+			return fmt.Errorf("%w: account %q could not be read from keyring backend %q: %w", ErrKeyringPasswordFile, keyName, kb, err)
 		}
 		return err
 	}
