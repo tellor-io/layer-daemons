@@ -66,7 +66,7 @@ func TestWaitForContractInitialized_ReturnsWhenContextCanceledDuringRetryDelay(t
 // initializeClientsAndContracts fails before daemonStartup is signaled; Stop() must
 // not block forever on daemonStartup.Wait().
 func TestStartNewClient_StopUnblocksWhenEthereumEnvIncomplete(t *testing.T) {
-	t.Setenv("ETH_RPC_NODES", "")
+	t.Setenv("BRIDGE_CHAIN_RPC_NODES", "")
 
 	ctx := context.Background()
 	c := StartNewClient(ctx, log.NewNopLogger(), tokenbridgetypes.NewDepositReports(), tokenbridgetipstypes.NewDepositTips(), "tellor-1")
@@ -84,23 +84,23 @@ func TestStartNewClient_StopUnblocksWhenEthereumEnvIncomplete(t *testing.T) {
 	}
 }
 
-func TestGetEthRpcUrlsUsesETHRPCNodes(t *testing.T) {
-	t.Setenv("ETH_RPC_NODES", "https://primary.example, https://fallback.example")
+func TestGetBridgeChainRpcUrlsUsesBridgeChainRPCNodes(t *testing.T) {
+	t.Setenv("BRIDGE_CHAIN_RPC_NODES", "https://primary.example, https://fallback.example")
 
 	c := newClient(log.NewNopLogger(), tokenbridgetypes.NewDepositReports(), tokenbridgetipstypes.NewDepositTips(), "tellor-1")
-	urls, err := c.getEthRpcUrls()
+	urls, err := c.getBridgeChainRpcUrls()
 
 	require.NoError(t, err)
 	require.Equal(t, []string{"https://primary.example", "https://fallback.example"}, urls)
 }
 
-func TestGetEthRpcUrlsRejectsInvalidEndpointList(t *testing.T) {
-	t.Setenv("ETH_RPC_NODES", "https://primary.example,,https://fallback.example")
+func TestGetBridgeChainRpcUrlsRejectsInvalidEndpointList(t *testing.T) {
+	t.Setenv("BRIDGE_CHAIN_RPC_NODES", "https://primary.example,,https://fallback.example")
 
 	c := newClient(log.NewNopLogger(), tokenbridgetypes.NewDepositReports(), tokenbridgetipstypes.NewDepositTips(), "tellor-1")
-	_, err := c.getEthRpcUrls()
+	_, err := c.getBridgeChainRpcUrls()
 
-	require.ErrorContains(t, err, "ETH_RPC_NODES")
+	require.ErrorContains(t, err, "BRIDGE_CHAIN_RPC_NODES")
 	require.ErrorContains(t, err, "empty entry")
 }
 

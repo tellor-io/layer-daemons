@@ -3,6 +3,7 @@ package customquery
 import (
 	"encoding/hex"
 	"fmt"
+	"math"
 	"math/big"
 	"regexp"
 	"sort"
@@ -178,6 +179,14 @@ func intToHex(value *big.Int, byteSize int) string {
 func MedianInHex(values []float64, responseType string, maxSpreadPercent float64) (string, error) {
 	if len(values) == 0 {
 		return "", fmt.Errorf("cannot calculate median of empty slice")
+	}
+	for _, value := range values {
+		if math.IsNaN(value) || math.IsInf(value, 0) {
+			return "", fmt.Errorf("cannot encode non-finite value: %v", value)
+		}
+		if value <= 0 {
+			return "", fmt.Errorf("cannot encode non-positive value: %f", value)
+		}
 	}
 
 	if len(values) == 1 {

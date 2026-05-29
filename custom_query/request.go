@@ -3,6 +3,7 @@ package customquery
 import (
 	"context"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"sync"
@@ -196,6 +197,14 @@ func fetchFromContractEndpoint(
 			SourceId:   contractReader.SourceId,
 		}
 	}
+	if err := validatePositiveFiniteValue(value, "contract value"); err != nil {
+		return Result{
+			Err:        err,
+			EndpointID: contractReader.Handler,
+			MarketId:   contractReader.MarketId,
+			SourceId:   contractReader.SourceId,
+		}
+	}
 
 	defer contractReader.Reader.Close()
 
@@ -232,6 +241,14 @@ func fetchFromRpcEndpoint(
 	if err != nil {
 		return Result{
 			Err:        fmt.Errorf("failed to fetch value: %w", err),
+			EndpointID: rpchandler.EndpointID,
+			MarketId:   rpchandler.MarketId,
+			SourceId:   rpchandler.SourceId,
+		}
+	}
+	if err := validatePositiveFiniteValue(value, "RPC value"); err != nil {
+		return Result{
+			Err:        err,
 			EndpointID: rpchandler.EndpointID,
 			MarketId:   rpchandler.MarketId,
 			SourceId:   rpchandler.SourceId,
@@ -289,6 +306,12 @@ func fetchFromCombinedEndpoint(
 			EndpointID: combinedReader.Handler,
 		}
 	}
+	if err := validatePositiveFiniteValue(value, "combined value"); err != nil {
+		return Result{
+			Err:        err,
+			EndpointID: combinedReader.Handler,
+		}
+	}
 
 	// Clean up readers
 	for _, reader := range combinedReader.ContractReaders {
@@ -304,4 +327,14 @@ func fetchFromCombinedEndpoint(
 
 func ConvertFloat64ToString(num float64) string {
 	return strconv.FormatFloat(num, 'f', -1, 64)
+}
+
+func validatePositiveFiniteValue(value float64, label string) error {
+	if math.IsNaN(value) || math.IsInf(value, 0) {
+		return fmt.Errorf("%s is not finite: %v", label, value)
+	}
+	if value <= 0 {
+		return fmt.Errorf("%s must be positive, got %f", label, value)
+	}
+	return nil
 }

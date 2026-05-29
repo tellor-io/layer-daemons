@@ -115,7 +115,9 @@ var StaticEndpointTemplateConfig = map[string]*EndpointTemplate{
 var StaticRPCEndpointTemplateConfig = map[string]*RPCEndpointTemplate{
 	"ethereum": {
 		URLs: []string{
-			"${ETH_RPC_NODES}",
+			"https://mainnet.infura.io/v3/${INFURA_API_KEY}",
+			"https://eth-mainnet.alchemyapi.io/v2/${ALCHEMY_API_KEY}",
+			"https://rpc.ankr.com/eth",
 		},
 	},
 }

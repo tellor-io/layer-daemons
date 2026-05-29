@@ -6,7 +6,8 @@ import (
 	"strings"
 )
 
-const EnvETHRPCNodes = "ETH_RPC_NODES"
+const EnvBridgeChainRPCNodes = "BRIDGE_CHAIN_RPC_NODES"
+const EnvETHMainnetRPCNodes = "ETH_MAINNET_RPC_NODES"
 
 func ParseEndpointList(value string) ([]string, error) {
 	parts := strings.Split(value, ",")
@@ -21,14 +22,26 @@ func ParseEndpointList(value string) ([]string, error) {
 	return endpoints, nil
 }
 
-func ETHRPCNodesFromEnv() ([]string, error) {
-	value := strings.TrimSpace(os.Getenv(EnvETHRPCNodes))
+func BridgeChainRPCNodesFromEnv() ([]string, error) {
+	value := strings.TrimSpace(os.Getenv(EnvBridgeChainRPCNodes))
 	if value == "" {
-		return nil, fmt.Errorf("%s not set", EnvETHRPCNodes)
+		return nil, fmt.Errorf("%s not set", EnvBridgeChainRPCNodes)
 	}
 	endpoints, err := ParseEndpointList(value)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", EnvETHRPCNodes, err)
+		return nil, fmt.Errorf("%s: %w", EnvBridgeChainRPCNodes, err)
+	}
+	return endpoints, nil
+}
+
+func ETHMainnetRPCNodesFromEnv() ([]string, error) {
+	value := strings.TrimSpace(os.Getenv(EnvETHMainnetRPCNodes))
+	if value == "" {
+		return nil, fmt.Errorf("%s not set", EnvETHMainnetRPCNodes)
+	}
+	endpoints, err := ParseEndpointList(value)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", EnvETHMainnetRPCNodes, err)
 	}
 	return endpoints, nil
 }

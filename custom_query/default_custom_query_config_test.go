@@ -132,7 +132,7 @@ func TestMergeCustomQueryConfig(t *testing.T) {
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			t.Setenv("ETH_RPC_NODES", "http://127.0.0.1:8545")
+			t.Setenv("ETH_MAINNET_RPC_NODES", "http://127.0.0.1:8545")
 
 			// Setup: create config directory
 			err := os.MkdirAll(filepath.Join(testDir, localDir), 0o700)

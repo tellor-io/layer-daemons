@@ -324,16 +324,16 @@ func (c *Client) QueryAPI(urlStr string) ([]byte, error) {
 	return body, nil
 }
 
-func (c *Client) getEthRpcUrls() ([]string, error) {
-	return utils.ETHRPCNodesFromEnv()
+func (c *Client) getBridgeChainRpcUrls() ([]string, error) {
+	return utils.BridgeChainRPCNodesFromEnv()
 }
 
 // initializeClientsAndContracts sets up the Ethereum clients and contract instances
 // This must be called before checking if the contract is initialized
 func (c *Client) initializeClientsAndContracts() error {
-	rpcURLs, err := c.getEthRpcUrls()
+	rpcURLs, err := c.getBridgeChainRpcUrls()
 	if err != nil {
-		return fmt.Errorf("failed to get ETH RPC urls: %w", err)
+		return fmt.Errorf("failed to get bridge chain RPC URLs: %w", err)
 	}
 
 	contractAddress, err := c.getTokenBridgeContractAddress()

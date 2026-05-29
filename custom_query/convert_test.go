@@ -61,6 +61,25 @@ func TestConversion(t *testing.T) {
 	}
 }
 
+func TestMedianInHexRejectsUnsafeOracleValues(t *testing.T) {
+	testCases := []struct {
+		name   string
+		values []float64
+	}{
+		{name: "zero", values: []float64{0}},
+		{name: "negative", values: []float64{-1}},
+		{name: "NaN", values: []float64{math.NaN()}},
+		{name: "infinite", values: []float64{math.Inf(1)}},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := customquery.MedianInHex(tc.values, "ufixed256x18", 100)
+			require.Error(t, err)
+		})
+	}
+}
+
 func DecodeHexString(hexStr, abiType string, bitSize, decimals int) (float64, error) {
 	bigInt, success := new(big.Int).SetString(hexStr, 16)
 	if !success {

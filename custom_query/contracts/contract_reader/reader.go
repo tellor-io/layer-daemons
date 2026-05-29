@@ -100,11 +100,11 @@ func (r *Reader) ReadContract(ctx context.Context, address, functionSig string, 
 			cancel()
 
 			if err == nil {
-				metrics.ContractCallSuccess.Inc()
 				// Decode the result as uint256
 				if len(result) == 0 {
-					return nil, nil
+					return nil, fmt.Errorf("empty contract response from %s for %s", address, functionSig)
 				}
+				metrics.ContractCallSuccess.Inc()
 				log.Debugf("Contract call successful: address=%s, function=%s, value=%s",
 					address, functionSig, result)
 				return result, nil

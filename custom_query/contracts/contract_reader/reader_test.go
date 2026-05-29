@@ -193,9 +193,9 @@ func TestReadContractIntegration(t *testing.T) {
 		t.Skip("Skipping integration test")
 	}
 
-	urls, err := daemonutils.ETHRPCNodesFromEnv()
+	urls, err := daemonutils.ETHMainnetRPCNodesFromEnv()
 	if err != nil {
-		t.Skipf("ETH_RPC_NODES not set, skipping integration test: %v", err)
+		t.Skipf("ETH_MAINNET_RPC_NODES not set, skipping integration test: %v", err)
 	}
 
 	reader, err := NewReader(urls, 10)

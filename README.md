@@ -35,10 +35,12 @@ The pricefeed client is started with the selected gRPC endpoint only. Endpoint-l
 Ethereum JSON-RPC configuration uses the same comma-separated primary/fallback pattern:
 
 ```sh
-ETH_RPC_NODES=https://mainnet.infura.io/v3/YOUR_INFURA_API_KEY,https://eth-mainnet.g.alchemy.com/v2/YOUR_ALCHEMY_API_KEY
+BRIDGE_CHAIN_RPC_NODES=https://mainnet.infura.io/v3/YOUR_INFURA_API_KEY,https://eth-mainnet.g.alchemy.com/v2/YOUR_ALCHEMY_API_KEY
 ```
 
-`ETH_RPC_NODES` is used anywhere the daemon reads Ethereum contracts, including token bridge deposit monitoring and Ethereum contract custom queries. The first endpoint is tried first; later entries are ordered fallbacks.
+`BRIDGE_CHAIN_RPC_NODES` is used by token bridge deposit monitoring. The first endpoint is tried first; later entries are ordered fallbacks.
+
+Ethereum mainnet custom query contract reads use the built-in mainnet endpoint templates by default. If `BRIDGE_CHAIN_RPC_NODES` points at a non-mainnet bridge chain such as Sepolia, set `ETH_MAINNET_RPC_NODES` to a comma-separated Ethereum mainnet endpoint list for custom queries.
 
 Custom query API keys are read from the generated `custom_query_config.toml` entries that reference environment placeholders. The current built-in templates use `CMC_PRO_API_KEY`, `CGPRO_API_KEY`, and `SUBGRAPH_API_KEY`.
 

@@ -371,7 +371,7 @@ func processRPCEndpoints(configured map[string]RPCEndpointTemplate) map[string][
 	processed := make(map[string][]string)
 	for chain, endpointConfig := range configured {
 		if chain == "ethereum" {
-			if urls, err := utils.ETHRPCNodesFromEnv(); err == nil {
+			if urls, err := utils.ETHMainnetRPCNodesFromEnv(); err == nil {
 				processed[chain] = urls
 				continue
 			}

@@ -17,17 +17,32 @@ func TestParseEndpointListRejectsEmptyEntries(t *testing.T) {
 	require.ErrorContains(t, err, "empty entry")
 }
 
-func TestETHRPCNodesFromEnv(t *testing.T) {
-	t.Setenv(EnvETHRPCNodes, "https://primary.example, https://fallback.example")
+func TestBridgeChainRPCNodesFromEnv(t *testing.T) {
+	t.Setenv(EnvBridgeChainRPCNodes, "https://primary.example, https://fallback.example")
 
-	endpoints, err := ETHRPCNodesFromEnv()
+	endpoints, err := BridgeChainRPCNodesFromEnv()
 	require.NoError(t, err)
 	require.Equal(t, []string{"https://primary.example", "https://fallback.example"}, endpoints)
 }
 
-func TestETHRPCNodesFromEnvRequiresValue(t *testing.T) {
-	t.Setenv(EnvETHRPCNodes, "")
+func TestBridgeChainRPCNodesFromEnvRequiresValue(t *testing.T) {
+	t.Setenv(EnvBridgeChainRPCNodes, "")
 
-	_, err := ETHRPCNodesFromEnv()
-	require.ErrorContains(t, err, EnvETHRPCNodes+" not set")
+	_, err := BridgeChainRPCNodesFromEnv()
+	require.ErrorContains(t, err, EnvBridgeChainRPCNodes+" not set")
+}
+
+func TestETHMainnetRPCNodesFromEnv(t *testing.T) {
+	t.Setenv(EnvETHMainnetRPCNodes, "https://mainnet-primary.example, https://mainnet-fallback.example")
+
+	endpoints, err := ETHMainnetRPCNodesFromEnv()
+	require.NoError(t, err)
+	require.Equal(t, []string{"https://mainnet-primary.example", "https://mainnet-fallback.example"}, endpoints)
+}
+
+func TestETHMainnetRPCNodesFromEnvRequiresValue(t *testing.T) {
+	t.Setenv(EnvETHMainnetRPCNodes, "")
+
+	_, err := ETHMainnetRPCNodesFromEnv()
+	require.ErrorContains(t, err, EnvETHMainnetRPCNodes+" not set")
 }

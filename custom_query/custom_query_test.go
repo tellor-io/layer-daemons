@@ -134,8 +134,9 @@ func TestBuildQueryEndpointsErrors(t *testing.T) {
 	}
 }
 
-func TestProcessRPCEndpointsUsesETHRPCNodesForEthereum(t *testing.T) {
-	t.Setenv("ETH_RPC_NODES", "https://primary.example, https://fallback.example")
+func TestProcessRPCEndpointsUsesETHMainnetRPCNodesForEthereum(t *testing.T) {
+	t.Setenv("BRIDGE_CHAIN_RPC_NODES", "https://sepolia.example")
+	t.Setenv("ETH_MAINNET_RPC_NODES", "https://mainnet-primary.example, https://mainnet-fallback.example")
 
 	endpoints := processRPCEndpoints(map[string]RPCEndpointTemplate{
 		"ethereum": {
@@ -143,11 +144,24 @@ func TestProcessRPCEndpointsUsesETHRPCNodesForEthereum(t *testing.T) {
 		},
 	})
 
-	require.Equal(t, []string{"https://primary.example", "https://fallback.example"}, endpoints["ethereum"])
+	require.Equal(t, []string{"https://mainnet-primary.example", "https://mainnet-fallback.example"}, endpoints["ethereum"])
+}
+
+func TestProcessRPCEndpointsDoesNotUseBridgeChainRPCNodesForEthereum(t *testing.T) {
+	t.Setenv("BRIDGE_CHAIN_RPC_NODES", "https://sepolia.example")
+	t.Setenv("ETH_MAINNET_RPC_NODES", "")
+
+	endpoints := processRPCEndpoints(map[string]RPCEndpointTemplate{
+		"ethereum": {
+			URLs: []string{"https://configured-mainnet.example"},
+		},
+	})
+
+	require.Equal(t, []string{"https://configured-mainnet.example"}, endpoints["ethereum"])
 }
 
 func TestProcessRPCEndpointsPreservesExplicitNonEthereumEndpoints(t *testing.T) {
-	t.Setenv("ETH_RPC_NODES", "https://primary.example")
+	t.Setenv("BRIDGE_CHAIN_RPC_NODES", "https://primary.example")
 
 	endpoints := processRPCEndpoints(map[string]RPCEndpointTemplate{
 		"other-chain": {
