@@ -6,8 +6,10 @@ import (
 	"strings"
 )
 
-const EnvBridgeChainRPCNodes = "BRIDGE_CHAIN_RPC_NODES"
-const EnvETHMainnetRPCNodes = "ETH_MAINNET_RPC_NODES"
+const (
+	EnvBridgeChainRPCNodes = "BRIDGE_CHAIN_RPC_NODES"
+	EnvETHMainnetRPCNodes  = "ETH_MAINNET_RPC_NODES"
+)
 
 func ParseEndpointList(value string) ([]string, error) {
 	parts := strings.Split(value, ",")
