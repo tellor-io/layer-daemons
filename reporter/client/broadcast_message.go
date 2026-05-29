@@ -46,7 +46,7 @@ func (c *Client) GenerateDepositMessages(ctx context.Context) error {
 		Value:     value,
 	}
 
-	telemetry.IncrCounterWithLabels([]string{"daemon_bridge_deposit", "found"}, 1, []metrics.Label{{Name: "chain_id", Value: c.cosmosCtx.ChainID}})
+	telemetry.IncrCounterWithLabels([]string{"daemon_bridge_deposit", "found"}, 1, []metrics.Label{{Name: "chain_id", Value: c.chainID()}})
 	c.txChan <- TxChannelInfo{Msg: msg, isBridge: true, NumRetries: bridgeDepositMaxRetries, QueryMetaId: 0}
 
 	return nil
@@ -190,7 +190,7 @@ func (c *Client) HandleBridgeDepositTxInChannel(ctx context.Context, data TxChan
 	// Remove oldest deposit report from cache
 	c.TokenDepositsCache.RemoveOldestReport()
 
-	telemetry.IncrCounterWithLabels([]string{"daemon_bridge_deposit", "reported"}, 1, []metrics.Label{{Name: "chain_id", Value: c.cosmosCtx.ChainID}})
+	telemetry.IncrCounterWithLabels([]string{"daemon_bridge_deposit", "reported"}, 1, []metrics.Label{{Name: "chain_id", Value: c.chainID()}})
 	c.logger.Info(fmt.Sprintf("Response from bridge tx report: %v", resp.TxResult))
 }
 

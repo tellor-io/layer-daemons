@@ -116,6 +116,7 @@ type Client struct {
 	GlobalfeeClient globalfeetypes.QueryClient
 	AuthClient      authtypes.QueryClient
 
+	cosmosCtxMu          sync.RWMutex
 	cosmosCtx            client.Context
 	MarketParams         []pricefeedtypes.MarketParam
 	MarketToExchange     *pricefeedservertypes.MarketToExchangePrices
@@ -412,7 +413,9 @@ func (c *Client) connectInitialGRPCEndpoint(ctx context.Context) error {
 
 func (c *Client) setGRPCConnection(conn *grpc.ClientConn) {
 	c.grpcConn = conn
+	c.cosmosCtxMu.Lock()
 	c.cosmosCtx = c.cosmosCtx.WithGRPCClient(conn)
+	c.cosmosCtxMu.Unlock()
 
 	// Rebuild all generated clients so subsequent queries use the active connection.
 	c.OracleQueryClient = oracletypes.NewQueryClient(conn)
@@ -516,11 +519,12 @@ func (c *Client) tryRestorePrimaryRPCEndpoint(ctx context.Context) {
 		c.logger.Warn("Primary CometBFT RPC endpoint health check failed", "endpoint", endpoint, "error", err)
 		return
 	}
-	if status.NodeInfo.Network != c.cosmosCtx.ChainID {
+	chainID := c.chainID()
+	if status.NodeInfo.Network != chainID {
 		c.logger.Warn(
 			"Primary CometBFT RPC endpoint returned unexpected chain ID",
 			"endpoint", endpoint,
-			"expected_chain_id", c.cosmosCtx.ChainID,
+			"expected_chain_id", chainID,
 			"actual_chain_id", status.NodeInfo.Network,
 		)
 		return
@@ -550,12 +554,13 @@ func (c *Client) tryRestorePrimaryGRPCEndpoint(ctx context.Context) {
 		c.logger.Warn("Primary Cosmos gRPC endpoint health check failed", "endpoint", endpoint, "error", err)
 		return
 	}
-	if resp.DefaultNodeInfo.Network != c.cosmosCtx.ChainID {
+	chainID := c.chainID()
+	if resp.DefaultNodeInfo.Network != chainID {
 		c.closeGRPCConnection(conn)
 		c.logger.Warn(
 			"Primary Cosmos gRPC endpoint returned unexpected chain ID",
 			"endpoint", endpoint,
-			"expected_chain_id", c.cosmosCtx.ChainID,
+			"expected_chain_id", chainID,
 			"actual_chain_id", resp.DefaultNodeInfo.Network,
 		)
 		return
@@ -587,13 +592,24 @@ func (c *Client) closeGRPCConnection(conn *grpc.ClientConn) {
 func (c *Client) setRPCClient(rpcClient client.CometRPC) {
 	c.rpcMu.Lock()
 	defer c.rpcMu.Unlock()
+	c.cosmosCtxMu.Lock()
+	defer c.cosmosCtxMu.Unlock()
 	c.cosmosCtx = c.cosmosCtx.WithClient(rpcClient)
 }
 
 func (c *Client) rpcContextWithClient(rpcClient client.CometRPC) client.Context {
-	c.rpcMu.RLock()
-	defer c.rpcMu.RUnlock()
-	return c.cosmosCtx.WithClient(rpcClient)
+	clientCtx := c.currentCosmosContext()
+	return clientCtx.WithClient(rpcClient)
+}
+
+func (c *Client) currentCosmosContext() client.Context {
+	c.cosmosCtxMu.RLock()
+	defer c.cosmosCtxMu.RUnlock()
+	return c.cosmosCtx
+}
+
+func (c *Client) chainID() string {
+	return c.currentCosmosContext().ChainID
 }
 
 func StartReporterDaemonTaskLoop(

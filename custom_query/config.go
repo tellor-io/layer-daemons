@@ -10,6 +10,7 @@ import (
 	"github.com/pelletier/go-toml"
 	contractreader "github.com/tellor-io/layer-daemons/custom_query/contracts/contract_reader"
 	rpcreader "github.com/tellor-io/layer-daemons/custom_query/rpc/rpc_reader"
+	"github.com/tellor-io/layer-daemons/utils"
 )
 
 const (
@@ -113,23 +114,7 @@ func BuildQueryEndpoints(homeDir, localDir, file string) (map[string]QueryConfig
 		return nil, fmt.Errorf("error unmarshalling toml file: %w", err)
 	}
 
-	// Process RPC endpoints
-	processedRPCEndpoints := make(map[string][]string)
-	for chain, endpointConfig := range config.RPCEndpoints {
-		var urls []string
-		for _, url := range endpointConfig.URLs {
-			expandedURL := os.ExpandEnv(url)
-			// Skip if env var still contains ${}
-			if strings.Contains(expandedURL, "${") && strings.Contains(expandedURL, "}") {
-				fmt.Printf("Skipping RPC endpoint with missing env var: %s\n", url)
-				continue
-			}
-			urls = append(urls, expandedURL)
-		}
-		if len(urls) > 0 {
-			processedRPCEndpoints[chain] = urls
-		}
-	}
+	processedRPCEndpoints := processRPCEndpoints(config.RPCEndpoints)
 
 	// loop through the queries and create a map of query ID to query config
 	queryMap := make(map[string]QueryConfig)
@@ -380,6 +365,42 @@ func BuildQueryEndpoints(homeDir, localDir, file string) (map[string]QueryConfig
 	}
 
 	return queryMap, nil
+}
+
+func processRPCEndpoints(configured map[string]RPCEndpointTemplate) map[string][]string {
+	processed := make(map[string][]string)
+	for chain, endpointConfig := range configured {
+		if chain == "ethereum" {
+			if urls, err := utils.ETHRPCNodesFromEnv(); err == nil {
+				processed[chain] = urls
+				continue
+			}
+		}
+
+		var urls []string
+		for _, url := range endpointConfig.URLs {
+			expandedURL := os.ExpandEnv(url)
+			// Skip if env var still contains ${}
+			if strings.Contains(expandedURL, "${") && strings.Contains(expandedURL, "}") {
+				fmt.Printf("Skipping RPC endpoint with missing env var: %s\n", url)
+				continue
+			}
+			if strings.Contains(expandedURL, ",") {
+				endpoints, err := utils.ParseEndpointList(expandedURL)
+				if err != nil {
+					fmt.Printf("Skipping RPC endpoint list with invalid value: %s\n", url)
+					continue
+				}
+				urls = append(urls, endpoints...)
+				continue
+			}
+			urls = append(urls, expandedURL)
+		}
+		if len(urls) > 0 {
+			processed[chain] = urls
+		}
+	}
+	return processed
 }
 
 // resolveMaxDataAge returns the effective max data age duration for an endpoint.

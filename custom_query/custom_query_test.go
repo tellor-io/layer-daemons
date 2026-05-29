@@ -133,3 +133,27 @@ func TestBuildQueryEndpointsErrors(t *testing.T) {
 		})
 	}
 }
+
+func TestProcessRPCEndpointsUsesETHRPCNodesForEthereum(t *testing.T) {
+	t.Setenv("ETH_RPC_NODES", "https://primary.example, https://fallback.example")
+
+	endpoints := processRPCEndpoints(map[string]RPCEndpointTemplate{
+		"ethereum": {
+			URLs: []string{"https://configured.example"},
+		},
+	})
+
+	require.Equal(t, []string{"https://primary.example", "https://fallback.example"}, endpoints["ethereum"])
+}
+
+func TestProcessRPCEndpointsPreservesExplicitNonEthereumEndpoints(t *testing.T) {
+	t.Setenv("ETH_RPC_NODES", "https://primary.example")
+
+	endpoints := processRPCEndpoints(map[string]RPCEndpointTemplate{
+		"other-chain": {
+			URLs: []string{"https://configured.example"},
+		},
+	})
+
+	require.Equal(t, []string{"https://configured.example"}, endpoints["other-chain"])
+}

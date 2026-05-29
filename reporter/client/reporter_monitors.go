@@ -30,10 +30,11 @@ import (
 )
 
 const (
-	defaultQueryTimeout = 10 * time.Second
-	defaultTxTimeout    = 10 * time.Second
-	defaultRetryDelay   = 200 * time.Millisecond
-	maxRetryDelay       = 30 * time.Second
+	defaultQueryTimeout          = 10 * time.Second
+	defaultTxTimeout             = 10 * time.Second
+	defaultRetryDelay            = 200 * time.Millisecond
+	maxRetryDelay                = 30 * time.Second
+	reportersValidatorAddressEnv = "REPORTERS_VALIDATOR_ADDRESS"
 )
 
 // toValidatorOperator converts a tellor1xxx bech32 address to its tellorvaloper1xxx
@@ -51,6 +52,26 @@ func toValidatorOperator(walletAddr string) string {
 		return ""
 	}
 	return valoperAddr
+}
+
+func validatorOperatorAddress(reporterAddr string) (string, string, error) {
+	configuredAddr := strings.TrimSpace(os.Getenv(reportersValidatorAddressEnv))
+	if configuredAddr != "" {
+		prefix, _, err := bech32.DecodeAndConvert(configuredAddr)
+		if err != nil {
+			return "", "", fmt.Errorf("%s is not a valid bech32 address: %w", reportersValidatorAddressEnv, err)
+		}
+		if prefix != "tellorvaloper" {
+			return "", "", fmt.Errorf("%s must use tellorvaloper prefix, got %q", reportersValidatorAddressEnv, prefix)
+		}
+		return configuredAddr, reportersValidatorAddressEnv, nil
+	}
+
+	valAddr := toValidatorOperator(reporterAddr)
+	if valAddr == "" {
+		return "", "", fmt.Errorf("could not derive validator operator address from reporter address")
+	}
+	return valAddr, "derived", nil
 }
 
 func (c *Client) MonitorCyclelistQuery(ctx context.Context, wg *sync.WaitGroup) {
@@ -270,9 +291,9 @@ func (c *Client) WithdrawAndStakeEarnedRewardsPeriodically(ctx context.Context, 
 		default:
 		}
 
-		valAddr := toValidatorOperator(c.accAddr.String())
-		if valAddr == "" {
-			c.logger.Error("could not derive validator operator address from reporter address")
+		valAddr, valAddrSource, err := validatorOperatorAddress(c.accAddr.String())
+		if err != nil {
+			c.logger.Error("could not resolve validator operator address", "error", err)
 			select {
 			case <-ctx.Done():
 				return
@@ -280,6 +301,7 @@ func (c *Client) WithdrawAndStakeEarnedRewardsPeriodically(ctx context.Context, 
 			}
 			continue
 		}
+		c.logger.Info("Using validator operator address for reward withdrawal", "validator_address", valAddr, "source", valAddrSource)
 
 		withdrawMsg := &reportertypes.MsgWithdrawTip{
 			SelectorAddress:  c.accAddr.String(),
@@ -315,11 +337,12 @@ func (c *Client) AutoUnbondStakePeriodically(ctx context.Context, wg *sync.WaitG
 		panic(err)
 	}
 	unbondAmount := math.NewInt(int64(amount))
-	valAddr := toValidatorOperator(c.accAddr.String())
-	if valAddr == "" {
-		c.logger.Error("could not derive validator operator address from reporter address, auto-unbonding disabled")
+	valAddr, valAddrSource, err := validatorOperatorAddress(c.accAddr.String())
+	if err != nil {
+		c.logger.Error("could not resolve validator operator address, auto-unbonding disabled", "error", err)
 		return
 	}
+	c.logger.Info("Using validator operator address for auto-unbonding", "validator_address", valAddr, "source", valAddrSource)
 	for {
 		select {
 		case <-ctx.Done():

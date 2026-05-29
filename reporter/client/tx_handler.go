@@ -273,13 +273,13 @@ func (c *Client) isSpotPriceSubmitValue(msg sdk.Msg) bool {
 	return strings.EqualFold(c.GetQueryType(submitValueMsg.GetQueryData()), "SpotPrice")
 }
 
-func (c *Client) EstimateGas(ctx context.Context, txf tx.Factory, bucket string, msg ...sdk.Msg) (uint64, error) {
+func (c *Client) EstimateGas(ctx context.Context, clientCtx client.Context, txf tx.Factory, bucket string, msg ...sdk.Msg) (uint64, error) {
 	if gasEstimate, ok := c.gasEstimator.getCachedEstimate(bucket); ok {
 		return gasEstimate, nil
 	}
 	adjustment := c.gasEstimator.currentGasAdjustment(bucket)
 	txf = txf.WithGasAdjustment(adjustment)
-	_, gasEstimate, err := tx.CalculateGas(c.cosmosCtx, txf, msg...)
+	_, gasEstimate, err := tx.CalculateGas(clientCtx, txf, msg...)
 	if err != nil {
 		return 0, fmt.Errorf("error calculating gas: %w", err)
 	}
@@ -329,7 +329,7 @@ func (c *Client) sendTx(ctx context.Context, queryMetaId uint64, isBridge bool, 
 		if txnResponse.TxResult.Code == 0 {
 			txSuccess = true // Prevent defer cleanup - keep queryMeta marked as committed
 			telemetry.IncrCounter(1, "daemon_sending_txs", "success")
-			telemetry.IncrCounterWithLabels([]string{"daemon_tx_gas_used_count"}, float32(txnResponse.TxResult.GasUsed), []metrics.Label{{Name: "chain_id", Value: c.cosmosCtx.ChainID}})
+			telemetry.IncrCounterWithLabels([]string{"daemon_tx_gas_used_count"}, float32(txnResponse.TxResult.GasUsed), []metrics.Label{{Name: "chain_id", Value: c.chainID()}})
 			return txnResponse, nil
 		}
 
@@ -380,7 +380,9 @@ func (c *Client) sendTxOnce(ctx context.Context, bucket string, msg ...sdk.Msg) 
 	}); err != nil {
 		return nil, "", fmt.Errorf("error getting block: %w", err)
 	}
-	txf := newFactory(c.cosmosCtx)
+	c.grpcMu.RLock()
+	clientCtx := c.currentCosmosContext()
+	txf := newFactory(clientCtx)
 
 	// Configure for unordered transactions (Cosmos SDK 0.53.4+)
 	// Set sequence to 0, enable unordered mode, and set unique timeout timestamp
@@ -391,23 +393,27 @@ func (c *Client) sendTxOnce(ctx context.Context, bucket string, msg ...sdk.Msg) 
 		WithUnordered(true).
 		WithTimeoutTimestamp(c.GetUniqueUnorderedTimeout())
 	var err error
-	txf, err = txf.Prepare(c.cosmosCtx)
+	txf, err = txf.Prepare(clientCtx)
 	if err != nil {
+		c.grpcMu.RUnlock()
 		return nil, "", fmt.Errorf("error preparing transaction factory: %w", err)
 	}
-	gasEstimate, err := c.EstimateGas(ctx, txf, bucket, msg...)
+	gasEstimate, err := c.EstimateGas(ctx, clientCtx, txf, bucket, msg...)
 	if err == nil {
 		txf = txf.WithGas(gasEstimate)
 	}
 	txn, err := txf.BuildUnsignedTx(msg...)
 	if err != nil {
+		c.grpcMu.RUnlock()
 		return nil, "", fmt.Errorf("error building unsigned transaction: %w", err)
 	}
-	if err = tx.Sign(c.cosmosCtx.CmdContext, txf, c.cosmosCtx.FromName, txn, true); err != nil {
+	if err = tx.Sign(clientCtx.CmdContext, txf, clientCtx.FromName, txn, true); err != nil {
+		c.grpcMu.RUnlock()
 		return nil, "", fmt.Errorf("error when signing transaction: %w", err)
 	}
 
-	txBytes, err := c.cosmosCtx.TxConfig.TxEncoder()(txn.GetTx())
+	txBytes, err := clientCtx.TxConfig.TxEncoder()(txn.GetTx())
+	c.grpcMu.RUnlock()
 	if err != nil {
 		return nil, "", fmt.Errorf("error encoding transaction: %w", err)
 	}
@@ -443,7 +449,7 @@ func (c *Client) broadcastTxWithFallback(ctx context.Context, txBytes []byte) (*
 
 func (c *Client) withRPCFallback(ctx context.Context, operation string, call func(client.CometRPC) error) error {
 	if c.rpcManager == nil {
-		return call(c.cosmosCtx.Client)
+		return call(c.currentCosmosContext().Client)
 	}
 
 	rpcClient, endpoint, err := c.rpcManager.currentClient()

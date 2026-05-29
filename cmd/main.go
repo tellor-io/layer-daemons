@@ -177,7 +177,7 @@ func init() {
 	rootCmd.Flags().String(daemonflags.FlagAutoBalanceBridgeToEthAddr, "", "Ethereum address to bridge excess tokens to (required when auto-balance-to-keep > 0)")
 
 	// Note: --home, --from, --grpc, and --node are validated in Run so that
-	// env vars (LAYER_HOME, FROM, GRPC_ADDR, NODE) are also accepted.
+	// env vars (LAYER_HOME, FROM, GRPC_NODES, RPC_NODES) are also accepted.
 
 	// Try to load .env from current directory, or parent directory if not found.
 	// .env file is optional — allows the daemon to run without one if env vars are set another way.

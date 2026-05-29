@@ -134,9 +134,7 @@ func TestSUSDSHandler_CalculationPrecision(t *testing.T) {
 
 // Integration test - tests the actual contract read functionality
 func TestSUSDSHandler_ContractRead_Integration(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	skipContractIntegrationUnlessEnabled(t)
 
 	// Use public RPC endpoints that don't require authentication
 	rpcURLs := []string{

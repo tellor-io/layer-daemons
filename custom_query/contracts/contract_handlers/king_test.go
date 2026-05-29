@@ -9,6 +9,8 @@ import (
 )
 
 func TestKingContractCall(t *testing.T) {
+	skipContractIntegrationUnlessEnabled(t)
+
 	// Test with mainnet ETH RPC endpoint
 	rpcURLs := []string{
 		"https://eth.public-rpc.com",

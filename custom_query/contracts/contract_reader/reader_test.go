@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	daemonutils "github.com/tellor-io/layer-daemons/utils"
 	"github.com/tellor-io/layer/utils"
 )
 
@@ -192,14 +193,10 @@ func TestReadContractIntegration(t *testing.T) {
 		t.Skip("Skipping integration test")
 	}
 
-	// This test requires a real RPC endpoint
-	// Set ETH_RPC_URL environment variable to run
-	rpcURL := "https://eth-mainnet.g.alchemy.com/v2/YOUR_KEY"
-	if rpcURL == "" || rpcURL == "https://eth-mainnet.g.alchemy.com/v2/YOUR_KEY" {
-		t.Skip("ETH_RPC_URL not set, skipping integration test")
+	urls, err := daemonutils.ETHRPCNodesFromEnv()
+	if err != nil {
+		t.Skipf("ETH_RPC_NODES not set, skipping integration test: %v", err)
 	}
-
-	urls := []string{rpcURL}
 
 	reader, err := NewReader(urls, 10)
 	if err != nil {
