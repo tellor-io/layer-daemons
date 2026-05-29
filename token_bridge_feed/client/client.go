@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/accounts/abi"
+	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/ethclient"
 	tokenbridgetypes "github.com/tellor-io/layer-daemons/server/types/token_bridge"
@@ -37,7 +38,10 @@ type Client struct {
 	ethRPCConnections []ethRPCConnection
 }
 
-const tokenBridgeTestContractEnv = "TOKEN_BRIDGE_TEST_CONTRACT"
+const (
+	tokenBridgeTestContractEnv = "TOKEN_BRIDGE_TEST_CONTRACT"
+	ethRPCCallTimeout          = 10 * time.Second
+)
 
 type ethRPCConnection struct {
 	endpoint string
@@ -428,7 +432,9 @@ func (c *Client) CheckForFinality(blockHeight *big.Int) (bool, error) {
 	var currentBlock uint64
 	var lastErr error
 	for _, conn := range c.ethRPCConnections {
-		block, err := conn.client.BlockNumber(context.Background())
+		callCtx, cancel := context.WithTimeout(context.Background(), ethRPCCallTimeout)
+		block, err := conn.client.BlockNumber(callCtx)
+		cancel()
 		if err == nil {
 			currentBlock = block
 			lastErr = nil
@@ -545,7 +551,9 @@ func (c *Client) connectEthRPCs(rpcURLs []string, contractAddress common.Address
 
 	var errs []string
 	for _, rpcURL := range rpcURLs {
-		ethClient, err := ethclient.Dial(rpcURL)
+		dialCtx, cancel := context.WithTimeout(context.Background(), ethRPCCallTimeout)
+		ethClient, err := ethclient.DialContext(dialCtx, rpcURL)
+		cancel()
 		if err != nil {
 			errs = append(errs, fmt.Sprintf("%s: %v", rpcURL, err))
 			c.logger.Error("Failed to connect to ETH RPC endpoint", "endpoint", rpcURL, "error", err)
@@ -591,7 +599,9 @@ func (c *Client) reconnectEthClient() error {
 func (c *Client) QueryCurrentDepositId() (*big.Int, error) {
 	var lastErr error
 	for _, conn := range c.ethRPCConnections {
-		depositId, err := conn.contract.DepositId(nil)
+		callCtx, cancel := context.WithTimeout(context.Background(), ethRPCCallTimeout)
+		depositId, err := conn.contract.DepositId(&bind.CallOpts{Context: callCtx})
+		cancel()
 		if err == nil {
 			return depositId, nil
 		}
@@ -604,7 +614,9 @@ func (c *Client) QueryCurrentDepositId() (*big.Int, error) {
 func (c *Client) QueryHasContractBeenInitialized() (bool, error) {
 	var lastErr error
 	for _, conn := range c.ethRPCConnections {
-		initialized, err := conn.contract.Initialized(nil)
+		callCtx, cancel := context.WithTimeout(context.Background(), ethRPCCallTimeout)
+		initialized, err := conn.contract.Initialized(&bind.CallOpts{Context: callCtx})
+		cancel()
 		if err == nil {
 			return initialized, nil
 		}
@@ -624,7 +636,9 @@ func (c *Client) QueryDepositDetails(depositId *big.Int) (DepositReceipt, error)
 	}
 	var lastErr error
 	for _, conn := range c.ethRPCConnections {
-		result, err := conn.contract.Deposits(nil, depositId)
+		callCtx, cancel := context.WithTimeout(context.Background(), ethRPCCallTimeout)
+		result, err := conn.contract.Deposits(&bind.CallOpts{Context: callCtx}, depositId)
+		cancel()
 		if err == nil {
 			deposit = result
 			lastErr = nil

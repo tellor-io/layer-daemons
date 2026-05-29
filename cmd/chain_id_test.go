@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -21,4 +23,23 @@ func TestValidateReachableChainIDsRejectsMismatchedEndpoints(t *testing.T) {
 	})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "disagree on chain ID")
+}
+
+func TestDetectEndpointChainIDsUsesPerEndpointTimeout(t *testing.T) {
+	originalTimeout := chainIDEndpointDetectTimeout
+	chainIDEndpointDetectTimeout = time.Millisecond
+	t.Cleanup(func() {
+		chainIDEndpointDetectTimeout = originalTimeout
+	})
+
+	detected, err := detectEndpointChainIDs(context.Background(), "test", []string{"hung", "healthy"}, func(ctx context.Context, endpoint string) (string, error) {
+		if endpoint == "hung" {
+			<-ctx.Done()
+			return "", ctx.Err()
+		}
+		return "tellor-1", nil
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, []detectedEndpointChainID{{endpoint: "healthy", chainID: "tellor-1"}}, detected)
 }

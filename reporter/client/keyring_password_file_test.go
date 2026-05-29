@@ -61,12 +61,12 @@ func TestKeyringReaderPasswordFile(t *testing.T) {
 		if !usingPasswordFile {
 			t.Fatalf("expected KEYRING_PASSWORD_FILE to be detected")
 		}
-		data, err := io.ReadAll(reader)
+		data, err := io.ReadAll(io.LimitReader(reader, int64(len("secret\n")*128)))
 		if err != nil {
 			t.Fatalf("failed to read password reader: %v", err)
 		}
-		if got := strings.Count(string(data), "secret\n"); got != 64 {
-			t.Fatalf("expected password repeated 64 times, got %d", got)
+		if got := strings.Count(string(data), "secret\n"); got != 128 {
+			t.Fatalf("expected password repeated 128 times, got %d", got)
 		}
 	})
 }

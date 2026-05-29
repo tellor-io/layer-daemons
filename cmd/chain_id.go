@@ -20,16 +20,15 @@ type detectedEndpointChainID struct {
 
 type chainIDDetector func(context.Context, string) (string, error)
 
-func detectChainIDFromEndpoints(ctx context.Context, grpcAddrs, nodeRPCAddrs []string) (string, string, string, error) {
-	detectCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
+var chainIDEndpointDetectTimeout = 15 * time.Second
 
-	grpcChainIDs, err := detectEndpointChainIDs(detectCtx, "gRPC", grpcAddrs, chainIDFromGRPC)
+func detectChainIDFromEndpoints(ctx context.Context, grpcAddrs, nodeRPCAddrs []string) (string, string, string, error) {
+	grpcChainIDs, err := detectEndpointChainIDs(ctx, "gRPC", grpcAddrs, chainIDFromGRPC)
 	if err != nil {
 		return "", "", "", err
 	}
 
-	rpcChainIDs, err := detectEndpointChainIDs(detectCtx, "node RPC", nodeRPCAddrs, chainIDFromRPC)
+	rpcChainIDs, err := detectEndpointChainIDs(ctx, "node RPC", nodeRPCAddrs, chainIDFromRPC)
 	if err != nil {
 		return "", "", "", err
 	}
@@ -51,7 +50,9 @@ func detectEndpointChainIDs(ctx context.Context, endpointType string, endpoints 
 	var detected []detectedEndpointChainID
 	var errs []string
 	for _, endpoint := range endpoints {
-		chainID, err := detector(ctx, endpoint)
+		endpointCtx, cancel := context.WithTimeout(ctx, chainIDEndpointDetectTimeout)
+		chainID, err := detector(endpointCtx, endpoint)
+		cancel()
 		if err != nil {
 			errs = append(errs, fmt.Sprintf("%s: %v", endpoint, err))
 			continue

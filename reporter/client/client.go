@@ -56,6 +56,29 @@ var (
 
 var mutex = &sync.RWMutex{}
 
+type repeatingPasswordReader struct {
+	mu   sync.Mutex
+	line []byte
+	pos  int
+}
+
+func newRepeatingPasswordReader(pass string) io.Reader {
+	return &repeatingPasswordReader{line: []byte(pass + "\n")}
+}
+
+func (r *repeatingPasswordReader) Read(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i := range p {
+		p[i] = r.line[r.pos]
+		r.pos = (r.pos + 1) % len(r.line)
+	}
+	return len(p), nil
+}
+
 // IsKeyringPasswordFileError reports whether startup failed while validating
 // KEYRING_PASSWORD_FILE or the account it is expected to unlock.
 func IsKeyringPasswordFileError(err error) bool {
@@ -80,10 +103,9 @@ func keyringReader() (io.Reader, bool, error) {
 		return nil, true, fmt.Errorf("%w: KEYRING_PASSWORD_FILE %q is empty", ErrKeyringPasswordFile, passFile)
 	}
 
-	// The file backend may ask for the passphrase more than once while opening
-	// and signing. Keep a buffered set of answers available for startup and the
-	// first broadcasts without falling back to interactive stdin.
-	return strings.NewReader(strings.Repeat(pass+"\n", 64)), true, nil
+	// The file backend may ask for the passphrase repeatedly while opening and
+	// signing. Keep answers available for the lifetime of the daemon.
+	return newRepeatingPasswordReader(pass), true, nil
 }
 
 func validateKeyringAccountUnlocked(kr keyring.Keyring, keyName string) error {
@@ -129,6 +151,8 @@ type Client struct {
 	// logger is the logger for the daemon.
 	logger     log.Logger
 	txChan     chan TxChannelInfo
+	txMu       sync.RWMutex
+	txClosed   bool
 	PriceGuard *PriceGuard
 	// Gas estimate refresh interval; <=0 disables periodic refresh.
 	refreshGasEstimatesInterval time.Duration
@@ -784,6 +808,13 @@ func isConnectionError(err error) bool {
 // trySend attempts to send to txChan but returns false if the context is canceled.
 // This prevents panics from sending on a closed channel during shutdown.
 func (c *Client) trySend(ctx context.Context, info TxChannelInfo) bool {
+	c.txMu.RLock()
+	defer c.txMu.RUnlock()
+	if c.txClosed {
+		c.logger.Debug("trySend: tx channel closed, dropping tx")
+		return false
+	}
+
 	select {
 	case c.txChan <- info:
 		return true
@@ -791,6 +822,16 @@ func (c *Client) trySend(ctx context.Context, info TxChannelInfo) bool {
 		c.logger.Debug("trySend: context canceled, dropping tx")
 		return false
 	}
+}
+
+func (c *Client) closeTxChan() {
+	c.txMu.Lock()
+	defer c.txMu.Unlock()
+	if c.txClosed {
+		return
+	}
+	close(c.txChan)
+	c.txClosed = true
 }
 
 func normalizeAutoBalanceEthAddr(addr string) (string, error) {
@@ -822,8 +863,8 @@ func (c *Client) Stop() {
 	c.stopOnce.Do(func() {
 		c.logger.Debug("ReporterClient: initiating shutdown")
 
-		// Close the transaction channel to signal BroadcastTxMsgToChain to stop
-		close(c.txChan)
+		// Close the transaction channel to signal BroadcastTxMsgToChain to stop.
+		c.closeTxChan()
 
 		// Wait for all goroutines to finish
 		c.wg.Wait()

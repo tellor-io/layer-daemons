@@ -47,7 +47,12 @@ func (c *Client) GenerateDepositMessages(ctx context.Context) error {
 	}
 
 	telemetry.IncrCounterWithLabels([]string{"daemon_bridge_deposit", "found"}, 1, []metrics.Label{{Name: "chain_id", Value: c.chainID()}})
-	c.txChan <- TxChannelInfo{Msg: msg, isBridge: true, NumRetries: bridgeDepositMaxRetries, QueryMetaId: 0}
+	if !c.trySend(ctx, TxChannelInfo{Msg: msg, isBridge: true, NumRetries: bridgeDepositMaxRetries, QueryMetaId: 0}) {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("could not queue bridge deposit report: %w", err)
+		}
+		return fmt.Errorf("could not queue bridge deposit report: tx channel closed")
+	}
 
 	return nil
 }
@@ -127,11 +132,16 @@ func (c *Client) GenerateAndBroadcastSpotPriceReport(ctx context.Context, qd []b
 		Value:     encodedValue,
 	}
 
-	c.txChan <- TxChannelInfo{
+	if !c.trySend(ctx, TxChannelInfo{
 		Msg:         msg,
 		isBridge:    false,
 		NumRetries:  0,
 		QueryMetaId: querymeta.Id,
+	}) {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("could not queue spot price report: %w", err)
+		}
+		return fmt.Errorf("could not queue spot price report: tx channel closed")
 	}
 
 	// Mark as committed immediately to prevent duplicate processing
