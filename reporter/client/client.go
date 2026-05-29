@@ -46,6 +46,15 @@ const (
 
 var ErrKeyringPasswordFile = errors.New("keyring password file validation failed")
 
+var validKeyringBackends = map[string]struct{}{
+	"os":      {},
+	"file":    {},
+	"kwallet": {},
+	"pass":    {},
+	"test":    {},
+	"memory":  {},
+}
+
 var (
 	commitedIds   = make(map[uint64]bool)
 	depositTipMap = make(map[uint64]bool) // map of deposit tips already sent to bridge daemon
@@ -106,6 +115,20 @@ func keyringReader() (io.Reader, bool, error) {
 	// The file backend may ask for the passphrase repeatedly while opening and
 	// signing. Keep answers available for the lifetime of the daemon.
 	return newRepeatingPasswordReader(pass), true, nil
+}
+
+func validateKeyringBackendConfig(backend string, usingPasswordFile bool) error {
+	backend = strings.TrimSpace(backend)
+	if backend == "" {
+		return fmt.Errorf("keyring-backend is required; set KEYRING_BACKEND or --keyring-backend")
+	}
+	if _, ok := validKeyringBackends[backend]; !ok {
+		return fmt.Errorf("unsupported keyring-backend %q; valid values are os, file, kwallet, pass, test, memory", backend)
+	}
+	if usingPasswordFile && backend != "file" {
+		return fmt.Errorf("%w: KEYRING_PASSWORD_FILE requires KEYRING_BACKEND=file, got %q", ErrKeyringPasswordFile, backend)
+	}
+	return nil
 }
 
 func validateKeyringAccountUnlocked(kr keyring.Keyring, keyName string) error {
@@ -375,19 +398,23 @@ func (c *Client) Start(
 	if err != nil {
 		return err
 	}
+	if err := validateKeyringBackendConfig(kb, usingPasswordFile); err != nil {
+		return err
+	}
+	c.logger.Info("Using keyring backend", "backend", kb)
 	kr, err := keyring.New("", kb, homeDir, keyringInput, encodingConfig.Codec)
 	if err != nil {
 		if usingPasswordFile {
 			return fmt.Errorf("%w: could not initialize keyring backend %q: %w", ErrKeyringPasswordFile, kb, err)
 		}
-		return err
+		return fmt.Errorf("could not initialize keyring backend %q: %w", kb, err)
 	}
 	record, err := kr.Key(keyName)
 	if err != nil {
 		if usingPasswordFile {
 			return fmt.Errorf("%w: account %q could not be read from keyring backend %q: %w", ErrKeyringPasswordFile, keyName, kb, err)
 		}
-		return err
+		return fmt.Errorf("account %q could not be read from keyring backend %q: %w", keyName, kb, err)
 	}
 	addr, err := record.GetAddress()
 	if err != nil {

@@ -173,9 +173,7 @@ func NewApp(
 			rpcEndpoints,
 		); err != nil {
 			logger.Error("Reporter client failed to start", "error", err)
-			if reporterclient.IsKeyringPasswordFileError(err) {
-				os.Exit(1)
-			}
+			os.Exit(1)
 		}
 	}()
 

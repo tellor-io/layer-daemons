@@ -69,3 +69,35 @@ func TestKeyringReaderPasswordFile(t *testing.T) {
 		}
 	})
 }
+
+func TestValidateKeyringBackendConfig(t *testing.T) {
+	t.Run("accepts supported backend", func(t *testing.T) {
+		if err := validateKeyringBackendConfig("file", false); err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+	})
+
+	t.Run("rejects empty backend", func(t *testing.T) {
+		err := validateKeyringBackendConfig("", false)
+		if err == nil || !strings.Contains(err.Error(), "keyring-backend is required") {
+			t.Fatalf("expected required backend error, got %v", err)
+		}
+	})
+
+	t.Run("rejects unsupported backend", func(t *testing.T) {
+		err := validateKeyringBackendConfig("not-real", false)
+		if err == nil || !strings.Contains(err.Error(), "unsupported keyring-backend") {
+			t.Fatalf("expected unsupported backend error, got %v", err)
+		}
+	})
+
+	t.Run("password file requires file backend", func(t *testing.T) {
+		err := validateKeyringBackendConfig("test", true)
+		if !errors.Is(err, ErrKeyringPasswordFile) {
+			t.Fatalf("expected ErrKeyringPasswordFile, got %v", err)
+		}
+		if !strings.Contains(err.Error(), "KEYRING_BACKEND=file") {
+			t.Fatalf("expected KEYRING_BACKEND=file hint, got %v", err)
+		}
+	})
+}
