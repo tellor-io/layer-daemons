@@ -46,8 +46,9 @@ type App struct {
 func NewApp(
 	ctx context.Context,
 	logger log.Logger,
-	chainId,
-	grpcAddress,
+	chainId string,
+	grpcEndpoints []string,
+	rpcEndpoints []string,
 	homePath string,
 	prometheusPort int,
 ) *App {
@@ -140,7 +141,7 @@ func NewApp(
 		// Use cancellable context instead of context.Background
 		ctx,
 		daemonFlags,
-		grpcAddress,
+		grpcEndpoints[0],
 		logger,
 		&daemontypes.GrpcClientImpl{},
 		marketParamsConfig,
@@ -161,7 +162,7 @@ func NewApp(
 			// Use cancellable context instead of context.Background
 			ctx,
 			daemonFlags,
-			grpcAddress,
+			grpcEndpoints,
 			&daemontypes.GrpcClientImpl{},
 			marketParamsConfig,
 			indexPriceCache,
@@ -169,6 +170,7 @@ func NewApp(
 			tokenBridgeTipsCache,
 			queries,
 			chainId,
+			rpcEndpoints,
 		); err != nil {
 			logger.Error("Reporter client failed to start", "error", err)
 			if reporterclient.IsKeyringPasswordFileError(err) {

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	rpchttp "github.com/cometbft/cometbft/rpc/client/http"
@@ -12,29 +13,65 @@ import (
 	"github.com/cosmos/cosmos-sdk/client/grpc/cmtservice"
 )
 
-// detectChainID queries both the gRPC endpoint and the CometBFT RPC endpoint
-// for the chain ID, validates that they agree, and returns the chain ID.
-// Returns an error if either endpoint is unreachable or if they return
-// different chain IDs.
-func detectChainID(ctx context.Context, grpcAddr, nodeRPCAddr string) (string, error) {
+type detectedEndpointChainID struct {
+	endpoint string
+	chainID  string
+}
+
+type chainIDDetector func(context.Context, string) (string, error)
+
+func detectChainIDFromEndpoints(ctx context.Context, grpcAddrs, nodeRPCAddrs []string) (string, string, string, error) {
 	detectCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 
-	grpcChainID, err := chainIDFromGRPC(detectCtx, grpcAddr)
+	grpcChainIDs, err := detectEndpointChainIDs(detectCtx, "gRPC", grpcAddrs, chainIDFromGRPC)
 	if err != nil {
-		return "", fmt.Errorf("failed to detect chain ID via gRPC (%s): %w", grpcAddr, err)
+		return "", "", "", err
 	}
 
-	rpcChainID, err := chainIDFromRPC(detectCtx, nodeRPCAddr)
+	rpcChainIDs, err := detectEndpointChainIDs(detectCtx, "node RPC", nodeRPCAddrs, chainIDFromRPC)
 	if err != nil {
-		return "", fmt.Errorf("failed to detect chain ID via node RPC (%s): %w", nodeRPCAddr, err)
+		return "", "", "", err
 	}
 
-	if grpcChainID != rpcChainID {
-		return "", fmt.Errorf("chain ID mismatch: gRPC returned %q, node RPC returned %q", grpcChainID, rpcChainID)
+	if err := validateReachableChainIDs("gRPC", grpcChainIDs); err != nil {
+		return "", "", "", err
+	}
+	if err := validateReachableChainIDs("node RPC", rpcChainIDs); err != nil {
+		return "", "", "", err
+	}
+	if grpcChainIDs[0].chainID != rpcChainIDs[0].chainID {
+		return "", "", "", fmt.Errorf("chain ID mismatch: gRPC returned %q, node RPC returned %q", grpcChainIDs[0].chainID, rpcChainIDs[0].chainID)
 	}
 
-	return grpcChainID, nil
+	return grpcChainIDs[0].chainID, grpcChainIDs[0].endpoint, rpcChainIDs[0].endpoint, nil
+}
+
+func detectEndpointChainIDs(ctx context.Context, endpointType string, endpoints []string, detector chainIDDetector) ([]detectedEndpointChainID, error) {
+	var detected []detectedEndpointChainID
+	var errs []string
+	for _, endpoint := range endpoints {
+		chainID, err := detector(ctx, endpoint)
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("%s: %v", endpoint, err))
+			continue
+		}
+		detected = append(detected, detectedEndpointChainID{endpoint: endpoint, chainID: chainID})
+	}
+	if len(detected) == 0 {
+		return nil, fmt.Errorf("failed to detect chain ID via any %s endpoint: %s", endpointType, strings.Join(errs, "; "))
+	}
+	return detected, nil
+}
+
+func validateReachableChainIDs(endpointType string, detected []detectedEndpointChainID) error {
+	expected := detected[0].chainID
+	for _, item := range detected[1:] {
+		if item.chainID != expected {
+			return fmt.Errorf("%s endpoints disagree on chain ID: %s returned %q, %s returned %q", endpointType, detected[0].endpoint, expected, item.endpoint, item.chainID)
+		}
+	}
+	return nil
 }
 
 func chainIDFromGRPC(ctx context.Context, grpcAddr string) (string, error) {

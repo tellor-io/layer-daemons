@@ -9,8 +9,12 @@ import (
 )
 
 func (c *Client) CurrentQuery(ctx context.Context) ([]byte, *oracletypes.QueryMeta, error) {
-	response, err := c.OracleQueryClient.CurrentCyclelistQuery(ctx, &oracletypes.QueryCurrentCyclelistQueryRequest{})
-	if err != nil {
+	var response *oracletypes.QueryCurrentCyclelistQueryResponse
+	if err := c.withGRPCFallback(ctx, "current cyclelist query", func() error {
+		var err error
+		response, err = c.OracleQueryClient.CurrentCyclelistQuery(ctx, &oracletypes.QueryCurrentCyclelistQueryRequest{})
+		return err
+	}); err != nil {
 		return nil, nil, fmt.Errorf("error calling 'CurrentCyclelistQuery': %w", err)
 	}
 	querydata, err := utils.QueryBytesFromString(response.QueryData)

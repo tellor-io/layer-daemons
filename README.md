@@ -2,11 +2,34 @@
 
 **Note:** Daemon services code was adopted from dydx [](https://github.com/dydxprotocol/v4-chain/tree/main/protocol/daemons) and reconfigured.
 
+## Configuration
+
+The daemon loads environment variables from the current directory's `.env` file, or from `../.env` when run from a subdirectory. See [`env.example`](./env.example) for a complete starting point.
+
+Layer endpoint configuration can be provided with comma-separated environment variables:
+
+```sh
+RPC_NODES=http://node_endpoint1:26657,http://node_endpoint2:26657
+GRPC_NODES=127.0.0.1:9090,node2:9090
+```
+
+The first endpoint in each list is treated as the primary endpoint. Later entries are used as ordered fallbacks.
+
+Endpoint env vars take precedence over the existing CLI flags:
+
+- `RPC_NODES` is preferred over `--node`.
+- `GRPC_NODES` is preferred over `--grpc`.
+- If an env var is unset, the daemon preserves the old behavior by using the matching flag value as a single endpoint.
+
+At startup, the daemon checks the configured gRPC and CometBFT RPC endpoints for a matching chain ID and starts with the first healthy matching endpoints. The reporter keeps the CometBFT RPC endpoint list and falls back to later RPC nodes for network/client failures during status checks, transaction lookup, and transaction broadcast. It does not switch endpoints for semantic chain failures such as out-of-gas responses, non-zero tx result codes, or normal tx-not-found polling.
+
+There is no shared API endpoint env var for this daemon. Third-party API configuration is handled by the pricefeed and custom query config files, while token bridge Ethereum RPC configuration currently uses `ETH_RPC_URL_PRIMARY` and `ETH_RPC_URL_FALLBACK`.
+
 ## Task loops
 
 ## PriceFetcher
 
-- Will query exchanges for prices once or multiple times based on wether the api supports single vs multi markets; ie wether an api needs to be queried for each pair individually or can return multiple pairs at once, [See here for exchange details](./constants/static_exchange_details.go).
+- Will query exchanges for prices once or multiple times based on whether the API supports single vs multi markets; i.e. whether an API needs to be queried for each pair individually or can return multiple pairs at once. [See here for exchange details](./constants/static_exchange_details.go).
 
 ## PriceEncoder
 
@@ -63,7 +86,7 @@ type MarketParam struct {
     // A string of json that encodes the configuration for resolving the price
     // of this market on various exchanges.
     ExchangeConfigJson string
-    // Query data is the market pair represention in layer
+    // Query data is the market pair representation in layer
     QueryData string
 }
 ```
