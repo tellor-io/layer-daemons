@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	rpchttp "github.com/cometbft/cometbft/rpc/client/http"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/spf13/viper"
 	globalfeetypes "github.com/strangelove-ventures/globalfee/x/globalfee/types"
@@ -182,9 +183,9 @@ type Client struct {
 	gasEstimator                *gasEstimateState
 
 	// Resources that need cleanup
-	grpcMu      sync.RWMutex
-	grpcConn    *grpc.ClientConn
-	grpcClient  daemontypes.GrpcClient
+	grpcMu     sync.RWMutex
+	grpcConn   *grpc.ClientConn
+	grpcClient daemontypes.GrpcClient
 
 	rpcClient   *rpchttp.HTTP // direct reference for WebSocket subscriptions
 	grpcManager *grpcEndpointManager
@@ -389,9 +390,6 @@ func (c *Client) Start(
 	if err != nil {
 		return fmt.Errorf("failed to create RPC client: %w", err)
 	}
-
-	c.rpcClient = rpcClient
-	c.cosmosCtx = c.cosmosCtx.WithClient(rpcClient)
 
 	c.logger.Info("CometBFT RPC client established", "endpoint", rpcEndpoint)
 	c.rpcManager = rpcManager
@@ -651,6 +649,9 @@ func (c *Client) setRPCClient(rpcClient client.CometRPC) {
 	defer c.rpcMu.Unlock()
 	c.cosmosCtxMu.Lock()
 	defer c.cosmosCtxMu.Unlock()
+	if httpClient, ok := rpcClient.(*rpchttp.HTTP); ok {
+		c.rpcClient = httpClient
+	}
 	c.cosmosCtx = c.cosmosCtx.WithClient(rpcClient)
 }
 

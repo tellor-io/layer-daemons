@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	rpchttp "github.com/cometbft/cometbft/rpc/client/http"
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/shirou/gopsutil/v3/process"
 	"github.com/spf13/viper"
@@ -85,13 +86,24 @@ func (c *Client) MonitorCyclelistQuery(ctx context.Context, wg *sync.WaitGroup) 
 		c.monitorCyclelistQueryPolling(ctx)
 		return
 	}
-	defer unsubscribe()
+	defer func() {
+		unsubscribe()
+	}()
 	c.logger.Info("MonitorCyclelistQuery: using event-driven block subscription")
 
 	// Fallback ticker: if no block event is received for 2s (e.g. slow node), poll anyway.
 	const blockEventTimeout = 2 * time.Second
 	fallback := time.NewTimer(blockEventTimeout)
 	defer fallback.Stop()
+	resetFallback := func() {
+		if !fallback.Stop() {
+			select {
+			case <-fallback.C:
+			default:
+			}
+		}
+		fallback.Reset(blockEventTimeout)
+	}
 
 	prevQueryData := []byte{}
 
@@ -140,12 +152,18 @@ func (c *Client) MonitorCyclelistQuery(ctx context.Context, wg *sync.WaitGroup) 
 			return
 		case _, ok := <-blockCh:
 			if !ok {
-				// Channel closed; fall back to polling for the rest of this session.
-				c.logger.Warn("block subscription channel closed, falling back to polling")
-				c.monitorCyclelistQueryPolling(ctx)
-				return
+				unsubscribe()
+				c.logger.Warn("block subscription channel closed, trying fallback RPC endpoint")
+				blockCh, unsubscribe, err = c.subscribeNewBlocks(ctx)
+				if err != nil {
+					c.logger.Warn("block subscription failed on all RPC endpoints, falling back to polling", "error", err)
+					c.monitorCyclelistQueryPolling(ctx)
+					return
+				}
+				resetFallback()
+				continue
 			}
-			fallback.Reset(blockEventTimeout)
+			resetFallback()
 			checkCycle()
 		case <-fallback.C:
 			// No block event received within timeout; check anyway and reset.
@@ -158,16 +176,53 @@ func (c *Client) MonitorCyclelistQuery(ctx context.Context, wg *sync.WaitGroup) 
 // subscribeNewBlocks subscribes to CometBFT NewBlock events over WebSocket.
 // Returns a channel that receives one value per block, an unsubscribe func, and any error.
 func (c *Client) subscribeNewBlocks(ctx context.Context) (<-chan struct{}, func(), error) {
-	if c.rpcClient == nil {
-		return nil, func() {}, fmt.Errorf("rpc client not initialized")
+	if c.rpcManager == nil {
+		if c.rpcClient == nil {
+			return nil, func() {}, fmt.Errorf("rpc client not initialized")
+		}
+		return c.subscribeNewBlocksWithClient(ctx, c.rpcClient, "current")
 	}
-	if !c.rpcClient.IsRunning() {
-		if err := c.rpcClient.Start(); err != nil {
+
+	var errs []string
+	rpcClient, endpoint, err := c.rpcManager.currentClient()
+	if err != nil {
+		errs = append(errs, fmt.Sprintf("%s: %v", endpoint, err))
+	} else if blockCh, unsubscribe, err := c.subscribeNewBlocksWithClient(ctx, rpcClient, endpoint); err == nil {
+		c.setRPCClient(rpcClient)
+		return blockCh, unsubscribe, nil
+	} else {
+		errs = append(errs, fmt.Sprintf("%s: %v", endpoint, err))
+	}
+
+	for attempt := 0; attempt < c.rpcManager.endpointCount()-1; attempt++ {
+		rpcClient, endpoint, err = c.rpcManager.nextClient()
+		if err != nil {
+			errs = append(errs, err.Error())
+			break
+		}
+		blockCh, unsubscribe, err := c.subscribeNewBlocksWithClient(ctx, rpcClient, endpoint)
+		if err == nil {
+			c.setRPCClient(rpcClient)
+			return blockCh, unsubscribe, nil
+		}
+		errs = append(errs, fmt.Sprintf("%s: %v", endpoint, err))
+	}
+
+	return nil, func() {}, fmt.Errorf("subscribing to NewBlock events on RPC endpoints: %s", strings.Join(errs, "; "))
+}
+
+func (c *Client) subscribeNewBlocksWithClient(ctx context.Context, rpcClient interface{}, endpoint string) (<-chan struct{}, func(), error) {
+	httpClient, ok := rpcClient.(*rpchttp.HTTP)
+	if !ok {
+		return nil, func() {}, fmt.Errorf("RPC client for %s does not support WebSocket subscriptions", endpoint)
+	}
+	if !httpClient.IsRunning() {
+		if err := httpClient.Start(); err != nil {
 			return nil, func() {}, fmt.Errorf("starting rpc client for WebSocket: %w", err)
 		}
 	}
 	subscriber := fmt.Sprintf("reporter-cycle-monitor-%d", time.Now().UnixNano())
-	eventCh, err := c.rpcClient.Subscribe(ctx, subscriber, "tm.event='NewBlock'")
+	eventCh, err := httpClient.Subscribe(ctx, subscriber, "tm.event='NewBlock'")
 	if err != nil {
 		return nil, func() {}, fmt.Errorf("subscribing to NewBlock events: %w", err)
 	}
@@ -194,7 +249,7 @@ func (c *Client) subscribeNewBlocks(ctx context.Context) (<-chan struct{}, func(
 	}()
 
 	unsubscribe := func() {
-		_ = c.rpcClient.Unsubscribe(ctx, subscriber, "tm.event='NewBlock'")
+		_ = httpClient.Unsubscribe(ctx, subscriber, "tm.event='NewBlock'")
 	}
 	return blockCh, unsubscribe, nil
 }
