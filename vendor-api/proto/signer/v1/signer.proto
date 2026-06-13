@@ -1,0 +1,194 @@
+syntax = "proto3";
+
+package signer.v1;
+
+option go_package = "github.com/tellor-io/bridge-signer/api/gen/signer/v1;signerv1";
+
+// BridgeSigner is the signing service exposed by the sidecar.
+// The validator calls this during ExtendVoteHandler to sign
+// oracle attestations and valset checkpoints.
+service BridgeSigner {
+  // Sign signs the given message bytes with the secp256k1 bridge key
+  // and returns a 65-byte ECDSA signature (r || s || v).
+  // msg must be exactly 32 bytes (a hash).
+  // v is 27 or 28, compatible with Ethereum ecrecover.
+  rpc Sign(SignRequest) returns (SignResponse);
+
+  // GetPublicKey returns the compressed 33-byte secp256k1 public key.
+  // Helps the node to derive the operator address.
+  rpc GetPublicKey(GetPublicKeyRequest) returns (GetPublicKeyResponse);
+
+  // SignRaw signs the given 32-byte hash directly (no extra hashing).
+  // Returns a 64-byte secp256k1 signature (r || s), compatible with
+  // Cosmos SDK transaction signing. Used by the reporter to sign txs
+  // without a local keyring.
+  rpc SignRaw(SignRawRequest) returns (SignRawResponse);
+
+  // GetAddress derives the bech32 address from the signer's public key
+  // using the given prefix (e.g. "tellor"). Allows the reporter to
+  // discover its own address without hard-coding it in config.
+  rpc GetAddress(GetAddressRequest) returns (GetAddressResponse);
+
+  // SignTx accepts raw Cosmos SignDoc bytes, validates that every message
+  // type_url is on the server's allowlist, then signs with the secp256k1
+  // key. Returns a 64-byte r||s signature (no v byte).
+  // Rejects with PERMISSION_DENIED if any message type is not allowed.
+  rpc SignTx(SignTxRequest) returns (SignTxResponse);
+
+  // GetChainID returns the cosmos chain ID the signer is configured for,
+  // so callers (e.g. the monitor) can discover it without a local env var.
+  rpc GetChainID(GetChainIDRequest) returns (GetChainIDResponse);
+
+  // SignBridgeCheckpoint accepts the STRUCTURED valset-checkpoint inputs
+  // (not a blind hash), recomputes the checkpoint itself using the byte-exact
+  // node encoder, validates it against the caller-supplied expected_checkpoint,
+  // enforces self-membership + a monotonic replay guard, then signs
+  // sha256(checkpoint) with the secp256k1 key. Returns a 64-byte r||s signature
+  // (no v byte) — the chain consumer brute-forces the recovery id itself.
+  // FAILS CLOSED (signs nothing) on any mismatch.
+  rpc SignBridgeCheckpoint(SignBridgeCheckpointRequest) returns (SignBridgeCheckpointResponse);
+}
+
+// SignRequest is the signing request sent by the validator.
+message SignRequest {
+  // msg is the raw bytes to sign. Must be exactly 32 bytes.
+  bytes msg = 1;
+
+  // request_id is an optional caller-assigned identifier for logs.
+  string request_id = 2;
+}
+
+// SignResponse contains the resulting signature.
+message SignResponse {
+  // signature is the 65-byte secp256k1 ECDSA signature (r || s || v).
+  // Compatible with Ethereum's ecrecover, v is 27 or 28.
+  bytes signature = 1;
+}
+
+// GetPublicKeyRequest
+message GetPublicKeyRequest {}
+
+// GetPublicKeyResponse contains the public key.
+message GetPublicKeyResponse {
+  // public_key is the compressed 33-byte secp256k1 public key.
+  // The validator uses this to derive the bech32 operator address
+  // and the Ethereum address for bridge contract verification.
+  bytes public_key = 1;
+}
+// SignRawRequest is the request for raw cosmos-compatible signing.
+message SignRawRequest {
+  // msg is the 32-byte hash to sign directly (no additional hashing).
+  bytes msg = 1;
+
+  // request_id is an optional caller-assigned identifier for logs.
+  string request_id = 2;
+}
+
+// SignRawResponse contains the resulting cosmos-format signature.
+message SignRawResponse {
+  // signature is the 64-byte secp256k1 ECDSA signature (r || s).
+  // Compatible with Cosmos SDK tx signing (no v byte).
+  bytes signature = 1;
+}
+
+// GetAddressRequest specifies the bech32 prefix to use.
+message GetAddressRequest {
+  // prefix is the bech32 human-readable part (e.g. "tellor").
+  string prefix = 1;
+}
+
+// GetAddressResponse contains the derived bech32 address.
+message GetAddressResponse {
+  // address is the bech32-encoded account address (e.g. "tellor1...").
+  string address = 1;
+}
+
+// SignTxRequest carries raw Cosmos SignDoc bytes for scope-checked signing.
+message SignTxRequest {
+  // sign_doc is the raw protobuf-encoded cosmos.tx.v1beta1.SignDoc bytes
+  // (the exact bytes that will be sha256-hashed and signed).
+  bytes sign_doc = 1;
+
+  // request_id is an optional caller-assigned identifier for logs.
+  string request_id = 2;
+}
+
+// SignTxResponse contains the resulting cosmos-format signature.
+message SignTxResponse {
+  // signature is the 64-byte secp256k1 ECDSA signature (r || s).
+  bytes signature = 1;
+}
+
+// GetChainIDRequest
+message GetChainIDRequest {}
+
+// GetChainIDResponse contains the configured chain ID.
+message GetChainIDResponse {
+  // chain_id is the cosmos chain ID (e.g. "layertest-5").
+  string chain_id = 1;
+}
+
+// BridgeValidator is a single entry of the bridge validator set, mirroring the
+// node's x/bridge types.BridgeValidator. The signer re-sorts and re-encodes the
+// set itself; caller ordering is not trusted.
+message BridgeValidator {
+  // ethereum_address is the raw 20-byte EVM address of the validator.
+  bytes ethereum_address = 1;
+
+  // power is the validator's bridge voting power.
+  uint64 power = 2;
+}
+
+// SignBridgeCheckpointRequest carries the STRUCTURED inputs the signer needs to
+// recompute the valset checkpoint locally (never a blind hash). The signer
+// recomputes the checkpoint and must match expected_checkpoint or fail closed.
+message SignBridgeCheckpointRequest {
+  // domain_separator is the 32-byte checkpoint domain separator the node
+  // computed. The signer independently recomputes it from chain_id and asserts
+  // equality.
+  bytes domain_separator = 1;
+
+  // power_threshold is sum(powers)*2/3 (node integer math). Re-derived + checked.
+  uint64 power_threshold = 2;
+
+  // validator_timestamp is the valset timestamp in UNIX MILLISECONDS.
+  uint64 validator_timestamp = 3;
+
+  // validator_set_hash is the node-computed keccak256 hash of the encoded
+  // validator set. The signer recomputes it and asserts equality.
+  bytes validator_set_hash = 4;
+
+  // validator_set is the structured validator set. The signer applies the
+  // node's canonical sort before encoding (caller ordering is not trusted).
+  repeated BridgeValidator validator_set = 5;
+
+  // block_height is the consensus block height (audit/context only).
+  uint64 block_height = 6;
+
+  // checkpoint_index is the valset checkpoint index (audit/context only).
+  uint64 checkpoint_index = 7;
+
+  // chain_id is the cosmos chain ID used to recompute the domain separator
+  // (mainnet => fixed "checkpoint" constant; else keccak256(abi.encode(...))).
+  string chain_id = 8;
+
+  // expected_checkpoint is the 32-byte checkpoint the node computed. The signer
+  // recomputes the checkpoint from the structured inputs and MUST match this,
+  // else it returns an error and signs nothing.
+  bytes expected_checkpoint = 9;
+
+  // request_id is an optional caller-assigned identifier for logs.
+  string request_id = 10;
+}
+
+// SignBridgeCheckpointResponse contains the signature over the recomputed
+// checkpoint and the checkpoint itself (for caller verification).
+message SignBridgeCheckpointResponse {
+  // signature is the 64-byte secp256k1 ECDSA signature (r || s) over
+  // sha256(checkpoint). No v byte — the chain brute-forces the recovery id.
+  bytes signature = 1;
+
+  // checkpoint is the 32-byte keccak256 checkpoint the signer recomputed and
+  // signed (equals expected_checkpoint on success).
+  bytes checkpoint = 2;
+}

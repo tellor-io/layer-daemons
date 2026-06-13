@@ -5,15 +5,16 @@ import (
 	"crypto/sha256"
 	"fmt"
 
+	signerv1 "github.com/tellor-io/bridge-remote-signer/api/gen/signer/v1"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+
 	"github.com/cosmos/cosmos-sdk/crypto/hd"
 	"github.com/cosmos/cosmos-sdk/crypto/keyring"
 	cosmossecp "github.com/cosmos/cosmos-sdk/crypto/keys/secp256k1"
 	cryptotypes "github.com/cosmos/cosmos-sdk/crypto/types"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/cosmos/cosmos-sdk/types/tx/signing"
-	signerv1 "github.com/tellor-io/bridge-remote-signer/api/gen/signer/v1"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 )
 
 // remoteSignerKeyring implements keyring.Keyring backed by a remote gRPC signer.

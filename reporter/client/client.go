@@ -402,7 +402,7 @@ func (c *Client) Start(
 		c.logger.Info("Using remote signer for tx signing", "addr", remoteSignerAddr)
 		kr, signerAccAddr, signerConn, err := newKeyringFromRemoteSigner(ctx, keyName, remoteSignerAddr)
 		if err != nil {
-			return fmt.Errorf("failed to initialise remote signer keyring: %w", err)
+			return fmt.Errorf("failed to initialize remote signer keyring: %w", err)
 		}
 		// Store the connection so it gets closed during shutdown.
 		c.remoteSignerConn = signerConn

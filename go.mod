@@ -260,7 +260,7 @@ replace cosmossdk.io/core => cosmossdk.io/core v0.11.0
 
 require github.com/tellor-io/bridge-remote-signer/api v0.0.0
 
-replace github.com/tellor-io/bridge-remote-signer/api => /home/tellor-io/bridge-remote-signer/api
+replace github.com/tellor-io/bridge-remote-signer/api => ./vendor-api
 
 // Pin grpc to the version already used by this module to prevent the bridge-remote-signer/api
 // dependency from upgrading it (which would pull in incompatible otel semconv versions).
