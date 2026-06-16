@@ -45,9 +45,7 @@ var combinedHandlerLabel = map[string]string{
 
 // queryTargetAsset overrides inferred display names for specific query IDs.
 var queryTargetAsset = map[string]string{
-	"35155b44678db9e9e021c2cf49dd20c31b49e03415325c2beffb5221cf63882d": "yUSD",
 	"187f74d310dc494e6efd928107713d4229cd319c2cf300224de02776090809f1": "SUSN",
-	"9874c1c7b7e76b78afdfdda6dcecef56edf6bf3d49d6d6ef2a98404ea2e04a59": "yETH",
 }
 
 // ClassifyQueryFeed returns the feed type, target asset symbol, and collateral asset

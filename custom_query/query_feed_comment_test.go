@@ -24,11 +24,6 @@ func TestClassifyQueryFeed(t *testing.T) {
 			feedType: customquery.FeedTypeMarket,
 			target:   "SUSDS",
 		},
-		"35155b44678db9e9e021c2cf49dd20c31b49e03415325c2beffb5221cf63882d": {
-			feedType:   customquery.FeedTypeFundamental,
-			target:     "yUSD",
-			collateral: "USDC",
-		},
 		"03731257e35c49e44b267640126358e5decebdd8f18b5e8f229542ec86e318cf": {
 			feedType:   customquery.FeedTypeFundamental,
 			target:     "SUSDE",
@@ -56,11 +51,6 @@ func TestClassifyQueryFeed(t *testing.T) {
 			feedType: customquery.FeedTypeMarket,
 			target:   "stATOM",
 		},
-		"91513b15db3cef441d52058b24412957f9cc8645c53aecf39446ac9b0d2dcca4": {
-			feedType:   customquery.FeedTypeFundamental,
-			target:     "VYUSD",
-			collateral: "USDC",
-		},
 		"187f74d310dc494e6efd928107713d4229cd319c2cf300224de02776090809f1": {
 			feedType:   customquery.FeedTypeFundamental,
 			target:     "SUSN",
@@ -70,11 +60,6 @@ func TestClassifyQueryFeed(t *testing.T) {
 			feedType:   customquery.FeedTypeFundamental,
 			target:     "SFRXUSD",
 			collateral: "FRX",
-		},
-		"9874c1c7b7e76b78afdfdda6dcecef56edf6bf3d49d6d6ef2a98404ea2e04a59": {
-			feedType:   customquery.FeedTypeFundamental,
-			target:     "yETH",
-			collateral: "ETH",
 		},
 	}
 
@@ -101,7 +86,6 @@ func TestGenerateFeedComment(t *testing.T) {
 	tests := map[string]string{
 		"05cddb6b67074aa61fcbe1d2fd5924e028bb699b506267df28c88f7deac4edc6": "SDAI/USD: (market) median of 3 sources.",
 		"03731257e35c49e44b267640126358e5decebdd8f18b5e8f229542ec86e318cf": "SUSDE/USD: (fundamental) ratio from susde contract × USDE/USD pricefeed cache.",
-		"35155b44678db9e9e021c2cf49dd20c31b49e03415325c2beffb5221cf63882d": "yUSD/USD: (fundamental) ratio from yieldfi-yusd contract × USDC/USD pricefeed cache.",
 		"187f74d310dc494e6efd928107713d4229cd319c2cf300224de02776090809f1": "SUSN/USD: (fundamental) ratio from susn contract × median USN/USD from 3 sources.",
 		"ab30caa3e7827a27c153063bce02c0b260b29c0c164040c003f0f9ec66002510": "SFRXUSD/USD: (fundamental) ratio from sfrxusd contract × median FRX/USD from 3 sources.",
 	}
