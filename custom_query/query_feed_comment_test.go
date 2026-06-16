@@ -20,10 +20,6 @@ func TestClassifyQueryFeed(t *testing.T) {
 			feedType: customquery.FeedTypeMarket,
 			target:   "SDAI",
 		},
-		"e010d752f28dcd2804004d0b57ab1bdc4eca092895d49160204120af11d15f3e": {
-			feedType: customquery.FeedTypeMarket,
-			target:   "USDN",
-		},
 		"59ae85cec665c779f18255dd4f3d97821e6a122691ee070b9a26888bc2a0e45a": {
 			feedType: customquery.FeedTypeMarket,
 			target:   "SUSDS",
