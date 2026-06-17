@@ -6,7 +6,7 @@
 
 The daemon loads environment variables from the current directory's `.env` file, or from `../.env` when run from a subdirectory. See [`env.example`](./env.example) for a complete starting point.
 
-Most CLI flags can also be provided as environment variables by uppercasing the flag name and replacing `-` or `.` with `_`, for example `--keyring-backend` becomes `KEYRING_BACKEND`. `LAYER_HOME` is preferred for the Layer home directory so the daemon does not accidentally use the shell's `HOME`.
+Most CLI flags can also be provided as environment variables by uppercasing the flag name and replacing `-` or `.` with `_`, for example `--keyring-backend` becomes `KEYRING_BACKEND` and `--from` becomes `FROM`. `LAYER_HOME` is preferred for the Layer home directory so the daemon does not accidentally use the shell's `HOME`.
 
 Layer endpoint configuration can be provided with comma-separated environment variables:
 
@@ -42,7 +42,7 @@ BRIDGE_CHAIN_RPC_NODES=https://mainnet.infura.io/v3/YOUR_INFURA_API_KEY,https://
 
 Ethereum mainnet custom query contract reads use the built-in mainnet endpoint templates by default. If `BRIDGE_CHAIN_RPC_NODES` points at a non-mainnet bridge chain such as Sepolia, set `ETH_MAINNET_RPC_NODES` to a comma-separated Ethereum mainnet endpoint list for custom queries.
 
-Custom query API keys are read from the generated `custom_query_config.toml` entries that reference environment placeholders. The current built-in templates use `CMC_PRO_API_KEY`, `CGPRO_API_KEY`, and `SUBGRAPH_API_KEY`.
+Custom query API keys are read from the generated `custom_query_config.toml` entries that reference environment placeholders. The current built-in templates use `CMC_PRO_API_KEY`, `CGPRO_API_KEY`, and `SUBGRAPH_API_KEY`. Built-in Ethereum mainnet RPC URL templates also expand `INFURA_API_KEY` and `ALCHEMY_API_KEY` when `ETH_MAINNET_RPC_NODES` is not set (see [`env.example`](./env.example)).
 
 ## Task loops
 

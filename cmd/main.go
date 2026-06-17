@@ -39,6 +39,9 @@ var rootCmd = &cobra.Command{
 		}
 		// Keep viper in sync for downstream consumers reading "home".
 		viper.Set(flags.FlagHome, homePath)
+		testMode := viper.GetBool("test")
+		testQueryID := viper.GetString("test-query-id")
+		prometheusPort := viper.GetInt("prometheus-port")
 		logLevelstr := viper.GetString(flags.FlagLogLevel)
 		configs.WriteDefaultPricefeedExchangeToml(homePath)
 		configs.WriteDefaultMarketParamsToml(homePath)
@@ -131,12 +134,6 @@ var rootCmd = &cobra.Command{
 	},
 }
 
-var (
-	prometheusPort int
-	testMode       bool
-	testQueryID    string
-)
-
 func main() {
 	daemonflags.AddDaemonFlagsToCmd(rootCmd)
 	if err := rootCmd.Execute(); err != nil {
@@ -153,7 +150,7 @@ func init() {
 	rootCmd.Flags().String(flags.FlagLogLevel, zerolog.InfoLevel.String(), "The logging level (trace|debug|info|warn|error|fatal|panic|disabled or '*:<level>,<key>:<level>')")
 	rootCmd.Flags().String(flags.FlagBroadcastMode, flags.BroadcastSync, "Transaction broadcasting mode (sync|async)")
 	rootCmd.Flags().String(flags.FlagNode, "", "<host>:<port> to CometBFT RPC interface for layer")
-	rootCmd.Flags().IntVar(&prometheusPort, "prometheus-port", 26661, "Port to serve Prometheus metrics on (default 26661). Applicable only if telemetry is enabled in app.toml.")
+	rootCmd.Flags().Int("prometheus-port", 26661, "Port to serve Prometheus metrics on (default 26661). Applicable only if telemetry is enabled in app.toml.")
 
 	// Price Guard Flags
 	rootCmd.Flags().Bool("price-guard-enabled", false, "Enable price guard to prevent reporting prices that differ from last reported price by a given threshold")
@@ -162,8 +159,8 @@ func init() {
 	rootCmd.Flags().Bool("price-guard-update-on-blocked", false, "Update last known price even if submission is blocked (default false)")
 
 	// Test mode flag
-	rootCmd.Flags().BoolVar(&testMode, "test", false, "Test mode: verify price feed configurations and calculate medians without starting daemon")
-	rootCmd.Flags().StringVar(&testQueryID, "test-query-id", "", "With --test, only run this custom query id (64-char hex); skips exchange/market tests. Exits non-zero if the query fails.")
+	rootCmd.Flags().Bool("test", false, "Test mode: verify price feed configurations and calculate medians without starting daemon")
+	rootCmd.Flags().String("test-query-id", "", "With --test, only run this custom query id (64-char hex); skips exchange/market tests. Exits non-zero if the query fails.")
 	// Automatic Unbonding flags
 	rootCmd.Flags().Uint32("auto-unbonding-frequency", 0, "Enable automatic unbonding every N days (0 = disabled, 1 - 21 days = valid)")
 	rootCmd.Flags().Uint32("auto-unbonding-amount", 0, "Amount of tokens in loya to unbond each unbonding transaction (0 = disabled)")
