@@ -146,6 +146,22 @@ sudo sh -c 'printf "%s\n" "YOUR_KEYRING_PASSWORD" > /etc/layer-daemons/reporter-
 
 Make sure the service `User` can read the file. When `KEYRING_PASSWORD_FILE` is set, startup fails and the daemon exits if the file cannot be read, is empty, or cannot unlock the configured `--from` account. If `KEYRING_PASSWORD_FILE` is not set, the daemon falls back to reading the keyring password from stdin.
 
+## Remote Signer
+
+Set `REMOTE_SIGNER_ADDR` / `--remote-signer-addr` to delegate transaction signing to a bridge remote signer gRPC service instead of loading a local private key from the reporter keyring.
+
+When remote signing is enabled, `--from` / `FROM` is still required as the local account name used by the Cosmos client context, but the signing key and account address are fetched from the remote signer. Startup fails if the signer cannot be reached, does not return a 33-byte compressed secp256k1 public key, or returns a Tellor address that does not match that public key.
+
+Example:
+
+```bash
+LAYER_HOME=/home/reporter/.layer \
+GRPC_NODES=your-grpc-host:9090 \
+RPC_NODES=tcp://your-rpc-host:26657 \
+REMOTE_SIGNER_ADDR=127.0.0.1:9191 \
+reporterd --from reporter
+```
+
 ## Reward Withdrawals And Auto-Unbonding
 
 The reporter periodically withdraws earned tips/rewards with `MsgWithdrawTip`. The interval is configured by `WITHDRAW_FREQUENCY` in seconds and defaults to `43200` (12 hours). By default, the validator operator address is derived from the reporter account address. If the reporter account is delegated to a different validator, set `REPORTERS_VALIDATOR_ADDRESS` to that validator's `tellorvaloper...` address.

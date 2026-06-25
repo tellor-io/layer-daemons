@@ -59,6 +59,9 @@ func (r *remoteSignerKeyring) SupportedAlgorithms() (keyring.SigningAlgoList, ke
 
 // Key implements keyring.Keyring. Returns the offline record for the managed key.
 func (r *remoteSignerKeyring) Key(uid string) (*keyring.Record, error) {
+	if uid != r.keyName {
+		return nil, fmt.Errorf("remoteSignerKeyring.Key: key %q not found", uid)
+	}
 	rec, err := keyring.NewOfflineRecord(uid, r.pubKey)
 	if err != nil {
 		return nil, fmt.Errorf("remoteSignerKeyring.Key: %w", err)
@@ -117,7 +120,10 @@ func (r *remoteSignerKeyring) SaveMultisig(_ string, _ cryptotypes.PubKey) (*key
 
 // Sign implements keyring.Signer (part of keyring.Keyring).
 // Computes sha256(msg) and calls SignRaw on the remote signer, returning a 64-byte (r||s) signature.
-func (r *remoteSignerKeyring) Sign(_ string, msg []byte, _ signing.SignMode) ([]byte, cryptotypes.PubKey, error) {
+func (r *remoteSignerKeyring) Sign(uid string, msg []byte, _ signing.SignMode) ([]byte, cryptotypes.PubKey, error) {
+	if uid != r.keyName {
+		return nil, nil, fmt.Errorf("remoteSignerKeyring.Sign: key %q not found", uid)
+	}
 	hash := sha256.Sum256(msg)
 	resp, err := r.signerConn.SignRaw(context.Background(), &signerv1.SignRawRequest{
 		Msg:       hash[:],
@@ -204,17 +210,30 @@ func newKeyringFromRemoteSigner(ctx context.Context, keyName, addr string) (keyr
 		return nil, nil, nil, fmt.Errorf("GetAddress from remote signer: %w", err)
 	}
 
-	accAddr, err := sdk.AccAddressFromBech32(addrResp.Address)
-	if err != nil {
-		conn.Close()
-		return nil, nil, nil, fmt.Errorf("parse address %q from remote signer: %w", addrResp.Address, err)
-	}
-
 	kr, err := newRemoteSignerKeyring(keyName, pubKeyResp.PublicKey, signerClient)
 	if err != nil {
 		conn.Close()
 		return nil, nil, nil, err
 	}
 
+	accAddr, err := remoteSignerAccountAddress(kr.pubKey, addrResp.Address)
+	if err != nil {
+		conn.Close()
+		return nil, nil, nil, err
+	}
+
 	return kr, accAddr, conn, nil
+}
+
+func remoteSignerAccountAddress(pubKey cryptotypes.PubKey, bech32Addr string) (sdk.AccAddress, error) {
+	accAddr, err := sdk.AccAddressFromBech32(bech32Addr)
+	if err != nil {
+		return nil, fmt.Errorf("parse address %q from remote signer: %w", bech32Addr, err)
+	}
+
+	expectedAddr := sdk.AccAddress(pubKey.Address())
+	if !expectedAddr.Equals(accAddr) {
+		return nil, fmt.Errorf("remote signer address %q does not match fetched public key", bech32Addr)
+	}
+	return accAddr, nil
 }
