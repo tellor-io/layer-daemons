@@ -12,9 +12,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	rpchttp "github.com/cometbft/cometbft/rpc/client/http"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/spf13/viper"
-	rpchttp "github.com/cometbft/cometbft/rpc/client/http"
 	globalfeetypes "github.com/strangelove-ventures/globalfee/x/globalfee/types"
 	customquery "github.com/tellor-io/layer-daemons/custom_query"
 	daemonflags "github.com/tellor-io/layer-daemons/flags"
@@ -183,9 +183,9 @@ type Client struct {
 	gasEstimator                *gasEstimateState
 
 	// Resources that need cleanup
-	grpcMu      sync.RWMutex
-	grpcConn    *grpc.ClientConn
-	grpcClient  daemontypes.GrpcClient
+	grpcMu     sync.RWMutex
+	grpcConn   *grpc.ClientConn
+	grpcClient daemontypes.GrpcClient
 
 	rpcClient   *rpchttp.HTTP // direct reference for WebSocket subscriptions
 	grpcManager *grpcEndpointManager
@@ -392,7 +392,7 @@ func (c *Client) Start(
 	}
 	c.rpcManager = rpcManager
 	c.setRPCClient(rpcClientVal)
-        c.logger.Info("CometBFT RPC client established", "endpoint", rpcEndpoint)
+	c.logger.Info("CometBFT RPC client established", "endpoint", rpcEndpoint)
 	encodingConfig := CreateEncodingConfig()
 	c.cosmosCtx = c.cosmosCtx.WithCodec(encodingConfig.Codec).WithInterfaceRegistry(encodingConfig.InterfaceRegistry).WithTxConfig(encodingConfig.TxConfig)
 
@@ -712,7 +712,7 @@ func (c *Client) RestorePrimaryEndpointsPeriodically(ctx context.Context, wg *sy
 			return
 		case <-ticker.C:
 			c.tryRestorePrimaryRPCEndpoint(ctx)
-                        c.tryRestorePrimaryGRPCEndpoint(ctx)
+			c.tryRestorePrimaryGRPCEndpoint(ctx)
 		}
 	}
 }
