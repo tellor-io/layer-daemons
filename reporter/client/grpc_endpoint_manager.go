@@ -95,7 +95,7 @@ func (m *grpcEndpointManager) switchToPrimary() {
 		return
 	}
 	m.current = 0
-	m.logger.Info("Switched Cosmos gRPC endpoint back to primary", "endpoint", m.endpoints[0])
+	m.logger.Info("Cosmos gRPC endpoint restored to primary", endpointLogFields(m.endpoints, m.endpoints[0])...)
 }
 
 func (m *grpcEndpointManager) nextConnection(ctx context.Context) (*grpc.ClientConn, string, error) {
@@ -108,11 +108,11 @@ func (m *grpcEndpointManager) nextConnection(ctx context.Context) (*grpc.ClientC
 		endpoint := m.endpoints[idx]
 		conn, err := m.factory(ctx, endpoint)
 		if err != nil {
-			errs = append(errs, fmt.Sprintf("%s: %v", endpoint, err))
+			errs = append(errs, fmt.Sprintf("endpoint_index=%d endpoint_role=%s: %v", idx, endpointRole(idx), endpointSafeError(err, m.endpoints)))
 			continue
 		}
 		m.current = idx
-		m.logger.Warn("Switched Cosmos gRPC endpoint", "endpoint", endpoint)
+		m.logger.Warn("Cosmos gRPC fallback endpoint active", endpointLogFields(m.endpoints, endpoint)...)
 		return conn, endpoint, nil
 	}
 

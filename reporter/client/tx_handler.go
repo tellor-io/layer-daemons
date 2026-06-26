@@ -454,7 +454,12 @@ func (c *Client) withRPCFallback(ctx context.Context, operation string, call fun
 
 	rpcClient, endpoint, err := c.rpcManager.currentClient()
 	if err != nil {
-		c.logger.Warn("Failed to create current CometBFT RPC client, trying fallback endpoint", "operation", operation, "endpoint", endpoint, "error", err)
+		keyVals := []interface{}{
+			"operation", operation,
+			"error", endpointSafeError(err, c.rpcManager.endpoints),
+		}
+		keyVals = append(keyVals, endpointLogFields(c.rpcManager.endpoints, endpoint)...)
+		c.logger.Warn("Failed to create current CometBFT RPC client, trying fallback endpoint", keyVals...)
 		rpcClient, endpoint, err = c.rpcManager.nextClient()
 		if err != nil {
 			return fmt.Errorf("create RPC client: %w", err)
@@ -469,10 +474,15 @@ func (c *Client) withRPCFallback(ctx context.Context, operation string, call fun
 
 	lastErr := err
 	for attempt := 0; attempt < c.rpcManager.endpointCount()-1; attempt++ {
-		c.logger.Warn("CometBFT RPC operation failed, trying fallback endpoint", "operation", operation, "endpoint", endpoint, "error", lastErr)
+		keyVals := []interface{}{
+			"operation", operation,
+			"error", endpointSafeError(lastErr, c.rpcManager.endpoints),
+		}
+		keyVals = append(keyVals, endpointLogFields(c.rpcManager.endpoints, endpoint)...)
+		c.logger.Warn("CometBFT RPC operation failed, trying fallback endpoint", keyVals...)
 		rpcClient, endpoint, err = c.rpcManager.nextClient()
 		if err != nil {
-			return fmt.Errorf("%s failed on RPC endpoints: %w; last error: %w", operation, err, lastErr)
+			return fmt.Errorf("%s failed on RPC endpoints: %w; last error: %w", operation, err, endpointSafeError(lastErr, c.rpcManager.endpoints))
 		}
 		c.setRPCClient(rpcClient)
 
@@ -485,7 +495,7 @@ func (c *Client) withRPCFallback(ctx context.Context, operation string, call fun
 		}
 		lastErr = err
 	}
-	return fmt.Errorf("%s failed on all RPC endpoints: %w", operation, lastErr)
+	return fmt.Errorf("%s failed on all RPC endpoints: %w", operation, endpointSafeError(lastErr, c.rpcManager.endpoints))
 }
 
 func (c *Client) SetGasPrice(ctx context.Context) error {

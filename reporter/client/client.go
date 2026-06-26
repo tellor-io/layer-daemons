@@ -387,11 +387,11 @@ func (c *Client) Start(
 	}
 	rpcClientVal, rpcEndpoint, err := rpcManager.currentClient()
 	if err != nil {
-		return fmt.Errorf("failed to create RPC client: %w", err)
+		return fmt.Errorf("failed to create RPC client: %w", endpointSafeError(err, rpcManager.endpoints))
 	}
 	c.rpcManager = rpcManager
 	c.setRPCClient(rpcClientVal)
-	c.logger.Info("CometBFT RPC client established", "endpoint", rpcEndpoint)
+	c.logger.Info("CometBFT RPC client established", endpointLogFields(c.rpcManager.endpoints, rpcEndpoint)...)
 	encodingConfig := CreateEncodingConfig()
 	c.cosmosCtx = c.cosmosCtx.WithCodec(encodingConfig.Codec).WithInterfaceRegistry(encodingConfig.InterfaceRegistry).WithTxConfig(encodingConfig.TxConfig)
 	remoteSignerAddr := viper.GetString("remote-signer-addr")
@@ -458,10 +458,13 @@ func (c *Client) Start(
 }
 
 func (c *Client) connectInitialGRPCEndpoint(ctx context.Context) error {
-	c.logger.Info("Establishing gRPC connection", "endpoint", c.grpcManager.currentEndpoint())
+	c.logger.Info("Establishing gRPC connection", endpointLogFields(c.grpcManager.endpoints, c.grpcManager.currentEndpoint())...)
 	conn, endpoint, err := c.grpcManager.currentConnection(ctx)
 	if err != nil {
-		c.logger.Warn("Failed to establish gRPC connection, trying fallback endpoint", "endpoint", endpoint, "error", err)
+		keyVals := append(endpointLogFields(c.grpcManager.endpoints, endpoint),
+			"error", endpointSafeError(err, c.grpcManager.endpoints),
+		)
+		c.logger.Warn("Failed to establish gRPC connection, trying fallback endpoint", keyVals...)
 		for attempt := 0; attempt < c.grpcManager.endpointCount()-1; attempt++ {
 			conn, endpoint, err = c.grpcManager.nextConnection(ctx)
 			if err == nil {
@@ -469,12 +472,12 @@ func (c *Client) connectInitialGRPCEndpoint(ctx context.Context) error {
 			}
 		}
 		if err != nil {
-			return fmt.Errorf("failed to establish gRPC connection to Cosmos query services: %w", err)
+			return fmt.Errorf("failed to establish gRPC connection to Cosmos query services: %w", endpointSafeError(err, c.grpcManager.endpoints))
 		}
 	}
 
 	c.setGRPCConnection(conn)
-	c.logger.Info("gRPC connection established successfully", "endpoint", endpoint)
+	c.logger.Info("gRPC connection established successfully", endpointLogFields(c.grpcManager.endpoints, endpoint)...)
 	return nil
 }
 
@@ -504,11 +507,14 @@ func (c *Client) reconnectGRPCEndpoint(ctx context.Context, operation string, la
 	defer c.grpcMu.Unlock()
 
 	oldConn := c.grpcConn
+	keyVals := []interface{}{
+		"operation", operation,
+		"error", endpointSafeError(lastErr, c.grpcManager.endpoints),
+	}
+	keyVals = append(keyVals, endpointLogFields(c.grpcManager.endpoints, c.grpcManager.currentEndpoint())...)
 	c.logger.Warn(
 		"Cosmos gRPC operation failed, trying fallback endpoint",
-		"operation", operation,
-		"endpoint", c.grpcManager.currentEndpoint(),
-		"error", lastErr,
+		keyVals...,
 	)
 
 	conn, endpoint, err := c.grpcManager.nextConnection(ctx)
@@ -522,7 +528,7 @@ func (c *Client) reconnectGRPCEndpoint(ctx context.Context, operation string, la
 			c.logger.Warn("Failed to close previous gRPC connection", "error", err)
 		}
 	}
-	c.logger.Info("Cosmos gRPC connection re-established", "endpoint", endpoint)
+	c.logger.Info("Cosmos gRPC connection re-established", endpointLogFields(c.grpcManager.endpoints, endpoint)...)
 	return nil
 }
 
@@ -535,7 +541,7 @@ func (c *Client) withGRPCFallback(ctx context.Context, operation string, call fu
 	lastErr := err
 	for attempt := 0; attempt < c.grpcManager.endpointCount()-1; attempt++ {
 		if err := c.reconnectGRPCEndpoint(ctx, operation, lastErr); err != nil {
-			return fmt.Errorf("%s failed on gRPC endpoints: %w; last error: %w", operation, err, lastErr)
+			return fmt.Errorf("%s failed on gRPC endpoints: %w; last error: %w", operation, err, endpointSafeError(lastErr, c.grpcManager.endpoints))
 		}
 
 		err = c.withGRPCQueryClient(call)
@@ -548,7 +554,7 @@ func (c *Client) withGRPCFallback(ctx context.Context, operation string, call fu
 		lastErr = err
 	}
 
-	return fmt.Errorf("%s failed on all gRPC endpoints: %w", operation, lastErr)
+	return fmt.Errorf("%s failed on all gRPC endpoints: %w", operation, endpointSafeError(lastErr, c.grpcManager.endpoints))
 }
 
 func (c *Client) tryRestorePrimaryGRPCEndpoint(ctx context.Context) {
@@ -561,25 +567,30 @@ func (c *Client) tryRestorePrimaryGRPCEndpoint(ctx context.Context) {
 
 	conn, endpoint, err := c.grpcManager.primaryConnection(probeCtx)
 	if err != nil {
-		c.logger.Warn("Primary Cosmos gRPC endpoint is not ready", "endpoint", endpoint, "error", err)
+		keyVals := append(endpointLogFields(c.grpcManager.endpoints, endpoint),
+			"error", endpointSafeError(err, c.grpcManager.endpoints),
+		)
+		c.logger.Warn("Primary Cosmos gRPC endpoint is not ready", keyVals...)
 		return
 	}
 
 	resp, err := cmtservice.NewServiceClient(conn).GetNodeInfo(probeCtx, &cmtservice.GetNodeInfoRequest{})
 	if err != nil {
 		c.closeGRPCConnection(conn)
-		c.logger.Warn("Primary Cosmos gRPC endpoint health check failed", "endpoint", endpoint, "error", err)
+		keyVals := append(endpointLogFields(c.grpcManager.endpoints, endpoint),
+			"error", endpointSafeError(err, c.grpcManager.endpoints),
+		)
+		c.logger.Warn("Primary Cosmos gRPC endpoint health check failed", keyVals...)
 		return
 	}
 	chainID := c.chainID()
 	if resp.DefaultNodeInfo.Network != chainID {
 		c.closeGRPCConnection(conn)
-		c.logger.Warn(
-			"Primary Cosmos gRPC endpoint returned unexpected chain ID",
-			"endpoint", endpoint,
+		keyVals := append(endpointLogFields(c.grpcManager.endpoints, endpoint),
 			"expected_chain_id", chainID,
 			"actual_chain_id", resp.DefaultNodeInfo.Network,
 		)
+		c.logger.Warn("Primary Cosmos gRPC endpoint returned unexpected chain ID", keyVals...)
 		return
 	}
 
@@ -741,7 +752,10 @@ func (c *Client) tryRestorePrimaryRPCEndpoint(ctx context.Context) {
 
 	rpcClientVal, endpoint, err := c.rpcManager.primaryClient()
 	if err != nil {
-		c.logger.Warn("Primary CometBFT RPC endpoint is not ready", "endpoint", endpoint, "error", err)
+		keyVals := append(endpointLogFields(c.rpcManager.endpoints, endpoint),
+			"error", endpointSafeError(err, c.rpcManager.endpoints),
+		)
+		c.logger.Warn("Primary CometBFT RPC endpoint is not ready", keyVals...)
 		return
 	}
 	httpClient, ok := rpcClientVal.(*rpchttp.HTTP)
@@ -750,29 +764,33 @@ func (c *Client) tryRestorePrimaryRPCEndpoint(ctx context.Context) {
 	}
 	if !httpClient.IsRunning() {
 		if err := httpClient.Start(); err != nil {
-			c.logger.Warn("Primary CometBFT RPC endpoint failed to start", "endpoint", endpoint, "error", err)
+			keyVals := append(endpointLogFields(c.rpcManager.endpoints, endpoint),
+				"error", endpointSafeError(err, c.rpcManager.endpoints),
+			)
+			c.logger.Warn("Primary CometBFT RPC endpoint failed to start", keyVals...)
 			return
 		}
 	}
 	status, err := httpClient.Status(probeCtx)
 	if err != nil {
-		c.logger.Warn("Primary CometBFT RPC endpoint health check failed", "endpoint", endpoint, "error", err)
+		keyVals := append(endpointLogFields(c.rpcManager.endpoints, endpoint),
+			"error", endpointSafeError(err, c.rpcManager.endpoints),
+		)
+		c.logger.Warn("Primary CometBFT RPC endpoint health check failed", keyVals...)
 		return
 	}
 	chainID := c.currentCosmosContext().ChainID
 	if status.NodeInfo.Network != chainID {
-		c.logger.Warn(
-			"Primary CometBFT RPC endpoint returned unexpected chain ID",
-			"endpoint", endpoint,
+		keyVals := append(endpointLogFields(c.rpcManager.endpoints, endpoint),
 			"expected_chain_id", chainID,
 			"actual_chain_id", status.NodeInfo.Network,
 		)
+		c.logger.Warn("Primary CometBFT RPC endpoint returned unexpected chain ID", keyVals...)
 		return
 	}
 
 	c.setRPCClient(rpcClientVal)
 	c.rpcManager.switchToPrimary()
-	c.logger.Info("CometBFT RPC endpoint restored to primary", "endpoint", endpoint)
 }
 
 func (c *Client) RefreshGasEstimatesPeriodically(ctx context.Context, wg *sync.WaitGroup) {

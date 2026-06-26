@@ -30,9 +30,23 @@ type Reader struct {
 type ethClient struct {
 	client  *ethclient.Client
 	rpc     *rpc.Client
-	url     string
+	index   int
 	healthy bool
 	mu      sync.RWMutex
+}
+
+func endpointRole(index int) string {
+	if index == 0 {
+		return "primary"
+	}
+	return "fallback"
+}
+
+func endpointSafeError(err error, endpoint string) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("%s", strings.ReplaceAll(err.Error(), endpoint, "<redacted endpoint>"))
 }
 
 func NewReader(urls []string, timeout int) (*Reader, error) {
@@ -42,17 +56,17 @@ func NewReader(urls []string, timeout int) (*Reader, error) {
 
 	clients := make([]*ethClient, 0, len(urls))
 
-	for _, url := range urls {
+	for index, url := range urls {
 		rpcClient, err := rpc.Dial(url)
 		if err != nil {
-			log.Warnf("Failed to connect to RPC endpoint %s: %v", url, err)
+			log.Warnf("Failed to connect to RPC endpoint index=%d role=%s: %v", index, endpointRole(index), endpointSafeError(err, url))
 			continue
 		}
 
 		ethClient := &ethClient{
 			client:  ethclient.NewClient(rpcClient),
 			rpc:     rpcClient,
-			url:     url,
+			index:   index,
 			healthy: true,
 		}
 		clients = append(clients, ethClient)
@@ -251,7 +265,7 @@ func (r *Reader) markClientUnhealthy(client *ethClient) {
 	client.mu.Lock()
 	client.healthy = false
 	client.mu.Unlock()
-	log.Warnf("Marked RPC client %s as unhealthy", client.url)
+	log.Warnf("Marked RPC client index=%d role=%s as unhealthy", client.index, endpointRole(client.index))
 }
 
 func (r *Reader) Close() {

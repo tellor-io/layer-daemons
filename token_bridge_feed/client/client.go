@@ -35,7 +35,8 @@ type Client struct {
 	tickers                  []*time.Ticker
 	stops                    []chan bool
 
-	ethRPCConnections []ethRPCConnection
+	ethRPCConnections  []ethRPCConnection
+	currentEthRPCIndex int
 }
 
 const (
@@ -47,6 +48,20 @@ type ethRPCConnection struct {
 	endpoint string
 	client   *ethclient.Client
 	contract *tokenbridge.TokenBridgeV2
+}
+
+func ethEndpointRole(index int) string {
+	if index == 0 {
+		return "primary"
+	}
+	return "fallback"
+}
+
+func endpointSafeError(err error, endpoint string) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("%s", strings.ReplaceAll(err.Error(), endpoint, "<redacted endpoint>"))
 }
 
 var tokenBridgeContractByChainID = map[string]string{
@@ -431,17 +446,18 @@ func (c *Client) QueryTokenBridgeContract() error {
 func (c *Client) CheckForFinality(blockHeight *big.Int) (bool, error) {
 	var currentBlock uint64
 	var lastErr error
-	for _, conn := range c.ethRPCConnections {
+	for endpointIndex, conn := range c.ethRPCConnections {
 		callCtx, cancel := context.WithTimeout(context.Background(), ethRPCCallTimeout)
 		block, err := conn.client.BlockNumber(callCtx)
 		cancel()
 		if err == nil {
+			c.recordEthRPCSuccess("block number", endpointIndex)
 			currentBlock = block
 			lastErr = nil
 			break
 		}
-		lastErr = err
-		c.logger.Error("Failed to query Ethereum block number, trying next endpoint", "endpoint", conn.endpoint, "error", err)
+		lastErr = endpointSafeError(err, conn.endpoint)
+		c.logEthRPCQueryFailure("block number", endpointIndex, lastErr)
 	}
 	if lastErr != nil {
 		return false, fmt.Errorf("failed to query block number from all ETH RPC endpoints: %w", lastErr)
@@ -550,21 +566,31 @@ func (c *Client) connectEthRPCs(rpcURLs []string, contractAddress common.Address
 	c.ethRPCConnections = nil
 
 	var errs []string
-	for _, rpcURL := range rpcURLs {
+	for endpointIndex, rpcURL := range rpcURLs {
 		dialCtx, cancel := context.WithTimeout(context.Background(), ethRPCCallTimeout)
 		ethClient, err := ethclient.DialContext(dialCtx, rpcURL)
 		cancel()
 		if err != nil {
-			errs = append(errs, fmt.Sprintf("%s: %v", rpcURL, err))
-			c.logger.Error("Failed to connect to ETH RPC endpoint", "endpoint", rpcURL, "error", err)
+			safeErr := endpointSafeError(err, rpcURL)
+			errs = append(errs, fmt.Sprintf("endpoint_index=%d endpoint_role=%s: %v", endpointIndex, ethEndpointRole(endpointIndex), safeErr))
+			c.logger.Error("Failed to connect to ETH RPC endpoint",
+				"endpoint_index", endpointIndex,
+				"endpoint_role", ethEndpointRole(endpointIndex),
+				"error", safeErr,
+			)
 			continue
 		}
 
 		contract, err := tokenbridge.NewTokenBridgeV2(contractAddress, ethClient)
 		if err != nil {
 			ethClient.Close()
-			errs = append(errs, fmt.Sprintf("%s: %v", rpcURL, err))
-			c.logger.Error("Failed to instantiate TokenBridge contract", "endpoint", rpcURL, "error", err)
+			safeErr := endpointSafeError(err, rpcURL)
+			errs = append(errs, fmt.Sprintf("endpoint_index=%d endpoint_role=%s: %v", endpointIndex, ethEndpointRole(endpointIndex), safeErr))
+			c.logger.Error("Failed to instantiate TokenBridge contract",
+				"endpoint_index", endpointIndex,
+				"endpoint_role", ethEndpointRole(endpointIndex),
+				"error", safeErr,
+			)
 			continue
 		}
 
@@ -596,32 +622,76 @@ func (c *Client) reconnectEthClient() error {
 	return c.initializeClientsAndContracts()
 }
 
+func (c *Client) logEthRPCQueryFailure(operation string, endpointIndex int, err error) {
+	keyVals := []interface{}{
+		"operation", operation,
+		"endpoint_index", endpointIndex,
+		"endpoint_role", ethEndpointRole(endpointIndex),
+		"error", err,
+	}
+	if endpointIndex+1 < len(c.ethRPCConnections) {
+		keyVals = append(keyVals,
+			"next_endpoint_index", endpointIndex+1,
+			"next_endpoint_role", ethEndpointRole(endpointIndex+1),
+		)
+		c.logger.Error("ETH RPC query failed, trying fallback endpoint", keyVals...)
+		return
+	}
+	c.logger.Error("ETH RPC query failed, no more endpoints to try", keyVals...)
+}
+
+func (c *Client) recordEthRPCSuccess(operation string, endpointIndex int) {
+	previousEndpointIndex := c.currentEthRPCIndex
+	if endpointIndex == 0 {
+		if previousEndpointIndex != 0 {
+			c.logger.Info("ETH RPC endpoint restored to primary",
+				"operation", operation,
+				"endpoint_index", endpointIndex,
+				"endpoint_role", ethEndpointRole(endpointIndex),
+				"previous_endpoint_index", previousEndpointIndex,
+				"previous_endpoint_role", ethEndpointRole(previousEndpointIndex),
+			)
+		}
+	} else if previousEndpointIndex != endpointIndex {
+		c.logger.Warn("ETH RPC fallback endpoint active",
+			"operation", operation,
+			"endpoint_index", endpointIndex,
+			"endpoint_role", ethEndpointRole(endpointIndex),
+			"previous_endpoint_index", previousEndpointIndex,
+			"previous_endpoint_role", ethEndpointRole(previousEndpointIndex),
+		)
+	}
+	c.currentEthRPCIndex = endpointIndex
+}
+
 func (c *Client) QueryCurrentDepositId() (*big.Int, error) {
 	var lastErr error
-	for _, conn := range c.ethRPCConnections {
+	for endpointIndex, conn := range c.ethRPCConnections {
 		callCtx, cancel := context.WithTimeout(context.Background(), ethRPCCallTimeout)
 		depositId, err := conn.contract.DepositId(&bind.CallOpts{Context: callCtx})
 		cancel()
 		if err == nil {
+			c.recordEthRPCSuccess("deposit ID", endpointIndex)
 			return depositId, nil
 		}
-		lastErr = err
-		c.logger.Error("Failed to query deposit ID, trying next endpoint", "endpoint", conn.endpoint, "error", err)
+		lastErr = endpointSafeError(err, conn.endpoint)
+		c.logEthRPCQueryFailure("deposit ID", endpointIndex, lastErr)
 	}
 	return nil, fmt.Errorf("failed to query deposit ID from all ETH RPC endpoints: %w", lastErr)
 }
 
 func (c *Client) QueryHasContractBeenInitialized() (bool, error) {
 	var lastErr error
-	for _, conn := range c.ethRPCConnections {
+	for endpointIndex, conn := range c.ethRPCConnections {
 		callCtx, cancel := context.WithTimeout(context.Background(), ethRPCCallTimeout)
 		initialized, err := conn.contract.Initialized(&bind.CallOpts{Context: callCtx})
 		cancel()
 		if err == nil {
+			c.recordEthRPCSuccess("contract initialization", endpointIndex)
 			return initialized, nil
 		}
-		lastErr = err
-		c.logger.Error("Failed to query contract initialization, trying next endpoint", "endpoint", conn.endpoint, "error", err)
+		lastErr = endpointSafeError(err, conn.endpoint)
+		c.logEthRPCQueryFailure("contract initialization", endpointIndex, lastErr)
 	}
 	return false, fmt.Errorf("failed to query has contract been initialized from all ETH RPC endpoints: %w", lastErr)
 }
@@ -635,17 +705,18 @@ func (c *Client) QueryDepositDetails(depositId *big.Int) (DepositReceipt, error)
 		BlockHeight *big.Int
 	}
 	var lastErr error
-	for _, conn := range c.ethRPCConnections {
+	for endpointIndex, conn := range c.ethRPCConnections {
 		callCtx, cancel := context.WithTimeout(context.Background(), ethRPCCallTimeout)
 		result, err := conn.contract.Deposits(&bind.CallOpts{Context: callCtx}, depositId)
 		cancel()
 		if err == nil {
+			c.recordEthRPCSuccess("deposit details", endpointIndex)
 			deposit = result
 			lastErr = nil
 			break
 		}
-		lastErr = err
-		c.logger.Error("Failed to query deposit details, trying next endpoint", "endpoint", conn.endpoint, "error", err)
+		lastErr = endpointSafeError(err, conn.endpoint)
+		c.logEthRPCQueryFailure("deposit details", endpointIndex, lastErr)
 	}
 	if lastErr != nil {
 		return DepositReceipt{}, fmt.Errorf("failed to query deposit details from all ETH RPC endpoints: %w", lastErr)

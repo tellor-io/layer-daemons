@@ -177,12 +177,12 @@ func (c *Client) subscribeNewBlocks(ctx context.Context) (<-chan struct{}, func(
 	var errs []string
 	rpcClientVal, endpoint, err := c.rpcManager.currentClient()
 	if err != nil {
-		errs = append(errs, fmt.Sprintf("%s: %v", endpoint, err))
+		errs = append(errs, endpointErrorSummary(c.rpcManager.endpoints, endpoint, err))
 	} else if blockCh, unsubscribe, err := c.subscribeNewBlocksWithClient(ctx, rpcClientVal, endpoint); err == nil {
 		c.setRPCClient(rpcClientVal)
 		return blockCh, unsubscribe, nil
 	} else {
-		errs = append(errs, fmt.Sprintf("%s: %v", endpoint, err))
+		errs = append(errs, endpointErrorSummary(c.rpcManager.endpoints, endpoint, err))
 	}
 
 	for attempt := 0; attempt < c.rpcManager.endpointCount()-1; attempt++ {
@@ -196,7 +196,7 @@ func (c *Client) subscribeNewBlocks(ctx context.Context) (<-chan struct{}, func(
 			c.setRPCClient(rpcClientVal)
 			return blockCh, unsubscribe, nil
 		}
-		errs = append(errs, fmt.Sprintf("%s: %v", endpoint, err))
+		errs = append(errs, endpointErrorSummary(c.rpcManager.endpoints, endpoint, err))
 	}
 
 	return nil, func() {}, fmt.Errorf("subscribing to NewBlock events on RPC endpoints: %s", strings.Join(errs, "; "))
@@ -205,7 +205,7 @@ func (c *Client) subscribeNewBlocks(ctx context.Context) (<-chan struct{}, func(
 func (c *Client) subscribeNewBlocksWithClient(ctx context.Context, rpcClientVal interface{}, endpoint string) (<-chan struct{}, func(), error) {
 	httpClient, ok := rpcClientVal.(*rpchttp.HTTP)
 	if !ok {
-		return nil, func() {}, fmt.Errorf("RPC client for %s does not support WebSocket subscriptions", endpoint)
+		return nil, func() {}, fmt.Errorf("RPC client does not support WebSocket subscriptions")
 	}
 	if !httpClient.IsRunning() {
 		if err := httpClient.Start(); err != nil {

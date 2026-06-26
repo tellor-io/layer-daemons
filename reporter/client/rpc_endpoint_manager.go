@@ -93,7 +93,7 @@ func (m *rpcEndpointManager) switchToPrimary() {
 		return
 	}
 	m.current = 0
-	m.logger.Info("Switched CometBFT RPC endpoint back to primary", "endpoint", m.endpoints[0])
+	m.logger.Info("CometBFT RPC endpoint restored to primary", endpointLogFields(m.endpoints, m.endpoints[0])...)
 }
 
 func (m *rpcEndpointManager) nextClient() (cosmosclient.CometRPC, string, error) {
@@ -106,11 +106,11 @@ func (m *rpcEndpointManager) nextClient() (cosmosclient.CometRPC, string, error)
 		endpoint := m.endpoints[idx]
 		client, err := m.factory(endpoint)
 		if err != nil {
-			errs = append(errs, fmt.Sprintf("%s: %v", endpoint, err))
+			errs = append(errs, fmt.Sprintf("endpoint_index=%d endpoint_role=%s: %v", idx, endpointRole(idx), endpointSafeError(err, m.endpoints)))
 			continue
 		}
 		m.current = idx
-		m.logger.Warn("Switched CometBFT RPC endpoint", "endpoint", endpoint)
+		m.logger.Warn("CometBFT RPC fallback endpoint active", endpointLogFields(m.endpoints, endpoint)...)
 		return client, endpoint, nil
 	}
 
