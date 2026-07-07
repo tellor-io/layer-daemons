@@ -168,6 +168,9 @@ func init() {
 	rootCmd.Flags().Duration("refresh-gas-estimates-interval", 12*time.Hour, "Interval for resetting cached gas estimates and gas-adjustment levels (<=0 disables)")
 	// Remote signer: when set, tx signing is delegated to the remote signer service instead of the local keyring
 	rootCmd.Flags().String("remote-signer-addr", "", "gRPC address of the remote signer service (e.g. localhost:9191). When set, tx signing uses the remote signer instead of the local keyring.")
+	rootCmd.Flags().String("remote-signer-ca-cert", "", "Path to the CA certificate for verifying the remote signer's TLS certificate.")
+	rootCmd.Flags().String("remote-signer-client-cert", "", "Path to the client TLS certificate presented to the remote signer.")
+	rootCmd.Flags().String("remote-signer-client-key", "", "Path to the client TLS private key.")
 
 	// Auto-bridge: keep wallet at a fixed balance by bridging the excess to Ethereum
 	rootCmd.Flags().Uint64(daemonflags.FlagAutoBalanceToKeep, 0, "Keep this amount of loya in the wallet; bridge any excess to Ethereum at --auto-balance-execution-time (0 = disabled)")

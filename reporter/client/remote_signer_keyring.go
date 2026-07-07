@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	signerv1 "github.com/tellor-io/bridge-remote-signer/api/gen/signer/v1"
+	bridgetls "github.com/tellor-io/bridge-remote-signer/api/tls"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
@@ -190,8 +191,20 @@ var _ keyring.Keyring = (*remoteSignerKeyring)(nil)
 // newKeyringFromRemoteSigner dials the remote signer at addr, fetches the public key
 // and bech32 address, and returns a keyring backed by the remote signer along with
 // the account address. The returned grpc.ClientConn must be closed when done.
-func newKeyringFromRemoteSigner(ctx context.Context, keyName, addr string) (keyring.Keyring, sdk.AccAddress, *grpc.ClientConn, error) {
-	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+// When caCert, clientCert, and clientKey are all non-empty, mTLS is used;
+// otherwise the connection falls back to insecure (for local/test use only).
+func newKeyringFromRemoteSigner(ctx context.Context, keyName, addr, caCert, clientCert, clientKey string) (keyring.Keyring, sdk.AccAddress, *grpc.ClientConn, error) {
+	var dialOpt grpc.DialOption
+	if caCert != "" && clientCert != "" && clientKey != "" {
+		creds, err := bridgetls.NewClientCredentials(caCert, clientCert, clientKey, "bridge-signer")
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("load mTLS credentials: %w", err)
+		}
+		dialOpt = grpc.WithTransportCredentials(creds)
+	} else {
+		dialOpt = grpc.WithTransportCredentials(insecure.NewCredentials())
+	}
+	conn, err := grpc.NewClient(addr, dialOpt)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("dial remote signer at %s: %w", addr, err)
 	}

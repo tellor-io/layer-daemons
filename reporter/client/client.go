@@ -183,20 +183,17 @@ type Client struct {
 	gasEstimator                *gasEstimateState
 
 	// Resources that need cleanup
-	grpcMu     sync.RWMutex
-	grpcConn   *grpc.ClientConn
-	grpcClient daemontypes.GrpcClient
-
-	rpcClient   *rpchttp.HTTP // direct reference for WebSocket subscriptions
-	grpcManager *grpcEndpointManager
-	rpcMu       sync.RWMutex
-	rpcManager  *rpcEndpointManager
-
+	grpcMu           sync.RWMutex
+	grpcConn         *grpc.ClientConn
+	grpcClient       daemontypes.GrpcClient
+	rpcClient        *rpchttp.HTTP // direct reference for WebSocket subscriptions
+	grpcManager      *grpcEndpointManager
+	rpcMu            sync.RWMutex
+	rpcManager       *rpcEndpointManager
 	remoteSignerConn *grpc.ClientConn // non-nil when --remote-signer-addr is set
-
-	wg          sync.WaitGroup
-	broadcastWg sync.WaitGroup // Tracks goroutines in BroadcastTxMsgToChain
-	stopOnce    sync.Once
+	wg               sync.WaitGroup
+	broadcastWg      sync.WaitGroup // Tracks goroutines in BroadcastTxMsgToChain
+	stopOnce         sync.Once
 }
 
 // GetUniqueUnorderedTimeout generates a unique timeout timestamp for unordered transactions.
@@ -397,12 +394,14 @@ func (c *Client) Start(
 	c.logger.Info("CometBFT RPC client established", "endpoint", rpcEndpoint)
 	encodingConfig := CreateEncodingConfig()
 	c.cosmosCtx = c.cosmosCtx.WithCodec(encodingConfig.Codec).WithInterfaceRegistry(encodingConfig.InterfaceRegistry).WithTxConfig(encodingConfig.TxConfig)
-
 	remoteSignerAddr := viper.GetString("remote-signer-addr")
 	if remoteSignerAddr != "" {
 		// Use remote signer for tx signing — no local private key needed.
 		c.logger.Info("Using remote signer for tx signing", "addr", remoteSignerAddr)
-		kr, signerAccAddr, signerConn, err := newKeyringFromRemoteSigner(ctx, keyName, remoteSignerAddr)
+		caCert := viper.GetString("remote-signer-ca-cert")
+		clientCert := viper.GetString("remote-signer-client-cert")
+		clientKey := viper.GetString("remote-signer-client-key")
+		kr, signerAccAddr, signerConn, err := newKeyringFromRemoteSigner(ctx, keyName, remoteSignerAddr, caCert, clientCert, clientKey)
 		if err != nil {
 			return fmt.Errorf("failed to initialize remote signer keyring: %w", err)
 		}
