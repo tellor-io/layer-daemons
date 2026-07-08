@@ -487,7 +487,6 @@ func (c *Client) broadcastTxToAllEndpoints(ctx context.Context, txBytes []byte) 
 		}(rc)
 	}
 
-	var firstAccepted *sdk.TxResponse
 	var lastErr error
 	for i := 0; i < len(clients); i++ {
 		r := <-results
@@ -500,19 +499,17 @@ func (c *Client) broadcastTxToAllEndpoints(ctx context.Context, txBytes []byte) 
 			c.logger.Warn("Broadcast to RPC endpoint failed", "endpoint", r.endpoint, "error", r.err)
 			lastErr = r.err
 		case r.resp != nil && (r.resp.Code == 0 || isAlreadyBroadcastCode(r.resp)):
+			// Return on the first acceptance; a slow or hung endpoint must not block the
+			// caller once the tx is already in a mempool. Remaining goroutines finish into
+			// the buffered channel and are discarded.
 			c.logger.Debug("Tx accepted by RPC endpoint", "endpoint", r.endpoint, "code", r.resp.Code, "txhash", r.resp.TxHash)
-			if firstAccepted == nil {
-				firstAccepted = r.resp
-			}
+			return r.resp, nil
 		case r.resp != nil:
 			c.logger.Warn("RPC endpoint rejected tx", "endpoint", r.endpoint, "code", r.resp.Code, "rawlog", r.resp.RawLog)
 			lastErr = fmt.Errorf("endpoint %s rejected tx: code %d: %s", r.endpoint, r.resp.Code, r.resp.RawLog)
 		}
 	}
 
-	if firstAccepted != nil {
-		return firstAccepted, nil
-	}
 	if lastErr != nil {
 		return nil, fmt.Errorf("broadcast tx failed on all %d RPC endpoints: %w", len(clients), lastErr)
 	}
