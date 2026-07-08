@@ -16,6 +16,7 @@ import (
 	metricsclient "github.com/tellor-io/layer-daemons/metrics/client"
 	pricefeedclient "github.com/tellor-io/layer-daemons/pricefeed/client"
 	reporterclient "github.com/tellor-io/layer-daemons/reporter/client"
+	"github.com/tellor-io/layer-daemons/reporter/dispute"
 	daemonserver "github.com/tellor-io/layer-daemons/server"
 	daemonservertypes "github.com/tellor-io/layer-daemons/server/types"
 	pricefeedtypes "github.com/tellor-io/layer-daemons/server/types/pricefeed"
@@ -134,6 +135,22 @@ func NewApp(
 
 	exchangeQueryConfig := configs.ReadExchangeQueryConfigFile(homePath)
 	marketParamsConfig := configs.ReadMarketParamsConfigFile(homePath)
+
+	// Dispute failsafe (opt-in via DISPUTE_MONITOR_ENABLED): before starting any other
+	// component, refuse to run while there is an open, non-ignored dispute on the network.
+	// Only create and run the monitor when it is enabled.
+	if disputeCfg := dispute.LoadConfigFromEnv(rpcEndpoints); disputeCfg.Enabled {
+		disputeMonitor := dispute.New(logger, disputeCfg)
+		disputeMonitor.CheckBeforeStart(ctx) // panics if an open, non-ignored dispute exists
+		appInstance.wg.Add(1)
+		go func() {
+			defer appInstance.wg.Done()
+			disputeMonitor.Run(ctx) // keeps watching via events + the API
+		}()
+	} else {
+		logger.Info("dispute monitor disabled")
+	}
+
 	// Start pricefeed client for sending prices for the pricefeed server to consume. These prices
 	// are retrieved via third-party APIs like Binance and then are encoded in-memory and
 	// periodically sent via gRPC to a shared socket with the server.
