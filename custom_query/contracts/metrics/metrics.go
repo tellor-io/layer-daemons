@@ -40,6 +40,18 @@ var (
 		Buckets: prometheus.DefBuckets,
 	})
 
+	// Response-cache metrics (see rpc_reader/cache.go). Useful to confirm the
+	// cache is actually shielding upstream APIs from rate limits.
+	RPCCacheHits = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "rpc_reader_cache_hits_total",
+		Help: "Total number of RPC responses served from the in-memory cache",
+	})
+
+	RPCCacheMisses = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "rpc_reader_cache_misses_total",
+		Help: "Total number of RPC cache misses that triggered an upstream fetch",
+	})
+
 	// Health check metrics (used by both contract and RPC readers)
 	RPCHealthCheckFailures = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "reader_health_check_failures_total",

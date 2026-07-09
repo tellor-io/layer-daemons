@@ -70,7 +70,9 @@ func cloneStringMap(m map[string]string) map[string]string {
 	return out
 }
 
-func (r *Reader) FetchJSON(ctx context.Context) ([]byte, error) {
+// fetchWithRetry performs the actual HTTP fetch (with retries). FetchJSON
+// (see cache.go) wraps this with the optional in-memory response cache.
+func (r *Reader) fetchWithRetry(ctx context.Context) ([]byte, error) {
 	startTime := time.Now()
 	defer func() {
 		metrics.RPCCallDuration.Observe(time.Since(startTime).Seconds())
