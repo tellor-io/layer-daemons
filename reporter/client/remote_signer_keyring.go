@@ -71,6 +71,9 @@ func (r *remoteSignerKeyring) SupportedAlgorithms() (keyring.SigningAlgoList, ke
 
 // Key implements keyring.Keyring. Returns the offline record for the managed key.
 func (r *remoteSignerKeyring) Key(uid string) (*keyring.Record, error) {
+	if uid != r.keyName {
+		return nil, fmt.Errorf("remoteSignerKeyring.Key: key %q not found", uid)
+	}
 	rec, err := keyring.NewOfflineRecord(uid, r.pubKey)
 	if err != nil {
 		return nil, fmt.Errorf("remoteSignerKeyring.Key: %w", err)
@@ -136,7 +139,10 @@ func (r *remoteSignerKeyring) SaveMultisig(_ string, _ cryptotypes.PubKey) (*key
 // types it is scoped to. Otherwise it falls back to the blind SignRaw path
 // (sha256(msg) -> SignRaw) used by the trusted one-shot operator commands.
 // Both paths return a 64-byte (r||s) signature.
-func (r *remoteSignerKeyring) Sign(_ string, msg []byte, _ signing.SignMode) ([]byte, cryptotypes.PubKey, error) {
+func (r *remoteSignerKeyring) Sign(uid string, msg []byte, _ signing.SignMode) ([]byte, cryptotypes.PubKey, error) {
+	if uid != r.keyName {
+		return nil, nil, fmt.Errorf("remoteSignerKeyring.Sign: key %q not found", uid)
+	}
 	if r.useSignTx {
 		resp, err := r.signerConn.SignTx(context.Background(), &signerv1.SignTxRequest{
 			SignDoc:   msg,
@@ -254,9 +260,14 @@ func newKeyringFromRemoteSigner(ctx context.Context, keyName, addr, caCert, clie
 		return nil, nil, "", nil, fmt.Errorf("GetAddress from remote signer: %w", err)
 	}
 
-	accAddr, err := sdk.AccAddressFromBech32(addrResp.Address)
+	kr, err := newRemoteSignerKeyring(keyName, pubKeyResp.PublicKey, signerClient, useSignTx)
 	if err != nil {
-		return nil, nil, "", nil, fmt.Errorf("parse address %q from remote signer: %w", addrResp.Address, err)
+		return nil, nil, "", nil, err
+	}
+
+	accAddr, err := remoteSignerAccountAddress(kr.pubKey, addrResp.Address)
+	if err != nil {
+		return nil, nil, "", nil, err
 	}
 
 	// Best-effort: discover the chain ID from the signer so it does not have to be
@@ -264,11 +275,6 @@ func newKeyringFromRemoteSigner(ctx context.Context, keyName, addr, caCert, clie
 	// chain ID configured) returns an error here; that is not fatal — the caller
 	// falls back to its own chain-ID source.
 	chainID := fetchRemoteSignerChainID(ctx, signerClient)
-
-	kr, err := newRemoteSignerKeyring(keyName, pubKeyResp.PublicKey, signerClient, useSignTx)
-	if err != nil {
-		return nil, nil, "", nil, err
-	}
 
 	ok = true
 	return kr, accAddr, chainID, conn, nil
@@ -284,4 +290,19 @@ func fetchRemoteSignerChainID(ctx context.Context, signerClient signerv1.BridgeS
 		return ""
 	}
 	return resp.ChainId
+}
+
+// remoteSignerAccountAddress parses the bech32 address the signer reported and verifies it
+// matches the fetched public key, so a misconfigured signer cannot make the reporter act on
+// the wrong account.
+func remoteSignerAccountAddress(pubKey cryptotypes.PubKey, bech32Addr string) (sdk.AccAddress, error) {
+	accAddr, err := sdk.AccAddressFromBech32(bech32Addr)
+	if err != nil {
+		return nil, fmt.Errorf("parse address %q from remote signer: %w", bech32Addr, err)
+	}
+	expectedAddr := sdk.AccAddress(pubKey.Address())
+	if !expectedAddr.Equals(accAddr) {
+		return nil, fmt.Errorf("remote signer address %q does not match fetched public key", bech32Addr)
+	}
+	return accAddr, nil
 }
