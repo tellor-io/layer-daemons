@@ -96,6 +96,34 @@ func (m *rpcEndpointManager) switchToPrimary() {
 	m.logger.Info("Switched CometBFT RPC endpoint back to primary", "endpoint", m.endpoints[0])
 }
 
+// rpcEndpointClient pairs a CometBFT RPC client with the endpoint it dials.
+type rpcEndpointClient struct {
+	client   cosmosclient.CometRPC
+	endpoint string
+}
+
+// allClients returns a client for every configured endpoint. Endpoints whose
+// client cannot be constructed are skipped (and logged by the caller via the
+// returned errs). Used to broadcast a tx to all registered nodes at once so at
+// least one includes it before the unordered-tx timeout expires.
+func (m *rpcEndpointManager) allClients() ([]rpcEndpointClient, []string) {
+	m.mu.RLock()
+	endpoints := append([]string(nil), m.endpoints...)
+	m.mu.RUnlock()
+
+	clients := make([]rpcEndpointClient, 0, len(endpoints))
+	var errs []string
+	for _, endpoint := range endpoints {
+		client, err := m.factory(endpoint)
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("%s: %v", endpoint, err))
+			continue
+		}
+		clients = append(clients, rpcEndpointClient{client: client, endpoint: endpoint})
+	}
+	return clients, errs
+}
+
 func (m *rpcEndpointManager) nextClient() (cosmosclient.CometRPC, string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

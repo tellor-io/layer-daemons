@@ -10,6 +10,7 @@ import (
 	"cosmossdk.io/log"
 
 	cosmosclient "github.com/cosmos/cosmos-sdk/client"
+	sdk "github.com/cosmos/cosmos-sdk/types"
 )
 
 func TestRPCEndpointManagerUsesFirstEndpoint(t *testing.T) {
@@ -53,6 +54,51 @@ func TestRPCEndpointManagerSwitchesBackToPrimary(t *testing.T) {
 
 	require.True(t, manager.usingPrimary())
 	require.Equal(t, "node1", manager.currentEndpoint())
+}
+
+func TestRPCEndpointManagerAllClientsReturnsEveryEndpoint(t *testing.T) {
+	manager, err := newRPCEndpointManagerWithFactory([]string{"node1", "node2", "node3"}, log.NewNopLogger(), func(endpoint string) (cosmosclient.CometRPC, error) {
+		return nil, nil
+	})
+	require.NoError(t, err)
+
+	clients, errs := manager.allClients()
+	require.Empty(t, errs)
+	require.Len(t, clients, 3)
+
+	got := []string{clients[0].endpoint, clients[1].endpoint, clients[2].endpoint}
+	require.Equal(t, []string{"node1", "node2", "node3"}, got)
+}
+
+func TestRPCEndpointManagerAllClientsSkipsFactoryFailures(t *testing.T) {
+	manager, err := newRPCEndpointManagerWithFactory([]string{"node1", "bad-node", "node3"}, log.NewNopLogger(), func(endpoint string) (cosmosclient.CometRPC, error) {
+		if endpoint == "bad-node" {
+			return nil, fmt.Errorf("bad endpoint")
+		}
+		return nil, nil
+	})
+	require.NoError(t, err)
+
+	clients, errs := manager.allClients()
+	require.Len(t, clients, 2)
+	require.Len(t, errs, 1)
+	require.Contains(t, errs[0], "bad-node")
+	require.Equal(t, "node1", clients[0].endpoint)
+	require.Equal(t, "node3", clients[1].endpoint)
+}
+
+func TestIsAlreadyBroadcastErr(t *testing.T) {
+	require.True(t, isAlreadyBroadcastErr(fmt.Errorf("tx already exists in cache")))
+	require.True(t, isAlreadyBroadcastErr(fmt.Errorf("RPC error: tx already in mempool")))
+	require.True(t, isAlreadyBroadcastErr(fmt.Errorf("Tx Already Exists")))
+	require.False(t, isAlreadyBroadcastErr(fmt.Errorf("connection refused")))
+	require.False(t, isAlreadyBroadcastErr(nil))
+}
+
+func TestIsAlreadyBroadcastCode(t *testing.T) {
+	require.True(t, isAlreadyBroadcastCode(&sdk.TxResponse{Code: 19, RawLog: "tx already exists in cache"}))
+	require.False(t, isAlreadyBroadcastCode(&sdk.TxResponse{Code: 11, RawLog: "out of gas"}))
+	require.False(t, isAlreadyBroadcastCode(nil))
 }
 
 func TestShouldFallbackRPCError(t *testing.T) {

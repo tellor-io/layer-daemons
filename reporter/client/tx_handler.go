@@ -437,6 +437,17 @@ func (c *Client) sendTxOnce(ctx context.Context, bucket string, msg ...sdk.Msg) 
 }
 
 func (c *Client) broadcastTxWithFallback(ctx context.Context, txBytes []byte) (*sdk.TxResponse, error) {
+	// When more than one RPC endpoint is registered, broadcast the same signed
+	// tx to all of them at once. Unordered txs carry a TTL (timeout timestamp);
+	// if the single node we picked accepts the tx into its mempool but then fails
+	// to gossip it (or drops it) before inclusion, the tx silently expires. Fanning
+	// out to every node means one of them lands it before the TTL. The tx bytes are
+	// identical, so duplicates are rejected by CometBFT as already-in-mempool — they
+	// are not re-executed.
+	if c.rpcManager != nil && c.rpcManager.endpointCount() > 1 {
+		return c.broadcastTxToAllEndpoints(ctx, txBytes)
+	}
+
 	var resp *sdk.TxResponse
 	err := c.withRPCFallback(ctx, "broadcast tx", func(rpcClient client.CometRPC) error {
 		clientCtx := c.rpcContextWithClient(rpcClient)
@@ -445,6 +456,86 @@ func (c *Client) broadcastTxWithFallback(ctx context.Context, txBytes []byte) (*
 		return err
 	})
 	return resp, err
+}
+
+// broadcastTxToAllEndpoints sends the same signed tx to every registered RPC
+// endpoint concurrently and returns the first accepting response. A node that
+// reports the tx as already known (another node beat it to the mempool/block)
+// is treated as success. If every node fails, the last non-duplicate error is
+// returned.
+func (c *Client) broadcastTxToAllEndpoints(ctx context.Context, txBytes []byte) (*sdk.TxResponse, error) {
+	clients, errs := c.rpcManager.allClients()
+	for _, e := range errs {
+		c.logger.Warn("Skipping RPC endpoint for broadcast: could not create client", "error", e)
+	}
+	if len(clients) == 0 {
+		return nil, fmt.Errorf("broadcast tx: no usable RPC endpoints (%d construction errors)", len(errs))
+	}
+
+	type broadcastResult struct {
+		endpoint string
+		resp     *sdk.TxResponse
+		err      error
+	}
+	results := make(chan broadcastResult, len(clients))
+
+	for _, rc := range clients {
+		go func(rc rpcEndpointClient) {
+			clientCtx := c.rpcContextWithClient(rc.client)
+			resp, err := clientCtx.BroadcastTx(txBytes)
+			results <- broadcastResult{endpoint: rc.endpoint, resp: resp, err: err}
+		}(rc)
+	}
+
+	var lastErr error
+	for i := 0; i < len(clients); i++ {
+		r := <-results
+		switch {
+		case r.err != nil:
+			if isAlreadyBroadcastErr(r.err) {
+				c.logger.Debug("Tx already known to RPC endpoint", "endpoint", r.endpoint)
+				continue
+			}
+			c.logger.Warn("Broadcast to RPC endpoint failed", "endpoint", r.endpoint, "error", r.err)
+			lastErr = r.err
+		case r.resp != nil && (r.resp.Code == 0 || isAlreadyBroadcastCode(r.resp)):
+			// Return on the first acceptance; a slow or hung endpoint must not block the
+			// caller once the tx is already in a mempool. Remaining goroutines finish into
+			// the buffered channel and are discarded.
+			c.logger.Debug("Tx accepted by RPC endpoint", "endpoint", r.endpoint, "code", r.resp.Code, "txhash", r.resp.TxHash)
+			return r.resp, nil
+		case r.resp != nil:
+			c.logger.Warn("RPC endpoint rejected tx", "endpoint", r.endpoint, "code", r.resp.Code, "rawlog", r.resp.RawLog)
+			lastErr = fmt.Errorf("endpoint %s rejected tx: code %d: %s", r.endpoint, r.resp.Code, r.resp.RawLog)
+		}
+	}
+
+	if lastErr != nil {
+		return nil, fmt.Errorf("broadcast tx failed on all %d RPC endpoints: %w", len(clients), lastErr)
+	}
+	return nil, fmt.Errorf("broadcast tx failed on all %d RPC endpoints: no accepting response", len(clients))
+}
+
+// isAlreadyBroadcastErr reports whether a broadcast error means another node
+// already has the tx (so it should be treated as success, not failure).
+func isAlreadyBroadcastErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := strings.ToLower(err.Error())
+	return strings.Contains(s, "tx already exists in cache") ||
+		strings.Contains(s, "already in mempool") ||
+		strings.Contains(s, "tx already exists")
+}
+
+// isAlreadyBroadcastCode reports whether a broadcast response code indicates the
+// tx was already seen (CometBFT mempool error for a duplicate tx).
+func isAlreadyBroadcastCode(resp *sdk.TxResponse) bool {
+	if resp == nil {
+		return false
+	}
+	// CometBFT returns a non-zero code with this rawlog when the tx is a duplicate.
+	return isAlreadyBroadcastErr(fmt.Errorf("%s", resp.RawLog))
 }
 
 func (c *Client) withRPCFallback(ctx context.Context, operation string, call func(client.CometRPC) error) error {

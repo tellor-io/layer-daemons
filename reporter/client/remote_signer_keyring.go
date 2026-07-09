@@ -25,11 +25,21 @@ type remoteSignerKeyring struct {
 	keyName    string
 	pubKey     cryptotypes.PubKey
 	signerConn signerv1.BridgeSignerClient
+
+	// useSignTx selects the signer RPC. When true (the always-on reporter
+	// daemon), Sign sends the raw SignDoc to SignTx, where the signer decodes it
+	// and rejects any message type not on its allowlist — so a compromised
+	// reporter cannot sign an arbitrary fund-moving tx. When false (the one-shot
+	// operator commands run manually with the node cert), Sign uses the blind
+	// SignRaw path, since those commands sign high-stakes one-time messages
+	// (create-validator/-reporter, unjail) that must NOT be on the reporter
+	// allowlist.
+	useSignTx bool
 }
 
 // newRemoteSignerKeyring creates a remoteSignerKeyring.
 // pubKeyBytes must be a 33-byte compressed secp256k1 public key.
-func newRemoteSignerKeyring(keyName string, pubKeyBytes []byte, signerConn signerv1.BridgeSignerClient) (*remoteSignerKeyring, error) {
+func newRemoteSignerKeyring(keyName string, pubKeyBytes []byte, signerConn signerv1.BridgeSignerClient, useSignTx bool) (*remoteSignerKeyring, error) {
 	if len(pubKeyBytes) != 33 {
 		return nil, fmt.Errorf("newRemoteSignerKeyring: expected 33-byte compressed public key, got %d", len(pubKeyBytes))
 	}
@@ -38,6 +48,7 @@ func newRemoteSignerKeyring(keyName string, pubKeyBytes []byte, signerConn signe
 		keyName:    keyName,
 		pubKey:     pubKey,
 		signerConn: signerConn,
+		useSignTx:  useSignTx,
 	}, nil
 }
 
@@ -120,11 +131,29 @@ func (r *remoteSignerKeyring) SaveMultisig(_ string, _ cryptotypes.PubKey) (*key
 }
 
 // Sign implements keyring.Signer (part of keyring.Keyring).
-// Computes sha256(msg) and calls SignRaw on the remote signer, returning a 64-byte (r||s) signature.
+//
+// For SIGN_MODE_DIRECT the supplied msg is the raw protobuf-encoded SignDoc
+// bytes. When useSignTx is set, those bytes are sent to the signer's SignTx RPC,
+// which decodes the SignDoc and rejects any message type not on its allowlist
+// before signing sha256(SignDoc) — so the reporter can only sign the message
+// types it is scoped to. Otherwise it falls back to the blind SignRaw path
+// (sha256(msg) -> SignRaw) used by the trusted one-shot operator commands.
+// Both paths return a 64-byte (r||s) signature.
 func (r *remoteSignerKeyring) Sign(uid string, msg []byte, _ signing.SignMode) ([]byte, cryptotypes.PubKey, error) {
 	if uid != r.keyName {
 		return nil, nil, fmt.Errorf("remoteSignerKeyring.Sign: key %q not found", uid)
 	}
+	if r.useSignTx {
+		resp, err := r.signerConn.SignTx(context.Background(), &signerv1.SignTxRequest{
+			SignDoc:   msg,
+			RequestId: "reporter-tx",
+		})
+		if err != nil {
+			return nil, nil, fmt.Errorf("remoteSignerKeyring.Sign: SignTx RPC failed: %w", err)
+		}
+		return resp.Signature, r.pubKey, nil
+	}
+
 	hash := sha256.Sum256(msg)
 	resp, err := r.signerConn.SignRaw(context.Background(), &signerv1.SignRawRequest{
 		Msg:       hash[:],
@@ -190,15 +219,18 @@ var _ keyring.Keyring = (*remoteSignerKeyring)(nil)
 
 // newKeyringFromRemoteSigner dials the remote signer at addr, fetches the public key
 // and bech32 address, and returns a keyring backed by the remote signer along with
-// the account address. The returned grpc.ClientConn must be closed when done.
+// the account address and the chain ID the signer is configured for (empty if the
+// signer does not provide one). The returned grpc.ClientConn must be closed when done.
 // When caCert, clientCert, and clientKey are all non-empty, mTLS is used;
 // otherwise the connection falls back to insecure (for local/test use only).
-func newKeyringFromRemoteSigner(ctx context.Context, keyName, addr, caCert, clientCert, clientKey string) (keyring.Keyring, sdk.AccAddress, *grpc.ClientConn, error) {
+// useSignTx selects the scope-checked SignTx path (reporter daemon) vs the blind
+// SignRaw path (one-shot operator commands); see remoteSignerKeyring.useSignTx.
+func newKeyringFromRemoteSigner(ctx context.Context, keyName, addr, caCert, clientCert, clientKey string, useSignTx bool) (keyring.Keyring, sdk.AccAddress, string, *grpc.ClientConn, error) {
 	var dialOpt grpc.DialOption
 	if caCert != "" && clientCert != "" && clientKey != "" {
 		creds, err := bridgetls.NewClientCredentials(caCert, clientCert, clientKey, "bridge-signer")
 		if err != nil {
-			return nil, nil, nil, fmt.Errorf("load mTLS credentials: %w", err)
+			return nil, nil, "", nil, fmt.Errorf("load mTLS credentials: %w", err)
 		}
 		dialOpt = grpc.WithTransportCredentials(creds)
 	} else {
@@ -206,44 +238,68 @@ func newKeyringFromRemoteSigner(ctx context.Context, keyName, addr, caCert, clie
 	}
 	conn, err := grpc.NewClient(addr, dialOpt)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("dial remote signer at %s: %w", addr, err)
+		return nil, nil, "", nil, fmt.Errorf("dial remote signer at %s: %w", addr, err)
 	}
+	// Close the connection on any error path; cleared once we hand it to the caller.
+	ok := false
+	defer func() {
+		if !ok {
+			conn.Close()
+		}
+	}()
 
 	signerClient := signerv1.NewBridgeSignerClient(conn)
 
 	pubKeyResp, err := signerClient.GetPublicKey(ctx, &signerv1.GetPublicKeyRequest{})
 	if err != nil {
-		conn.Close()
-		return nil, nil, nil, fmt.Errorf("GetPublicKey from remote signer: %w", err)
+		return nil, nil, "", nil, fmt.Errorf("GetPublicKey from remote signer: %w", err)
 	}
 
 	addrResp, err := signerClient.GetAddress(ctx, &signerv1.GetAddressRequest{Prefix: "tellor"})
 	if err != nil {
-		conn.Close()
-		return nil, nil, nil, fmt.Errorf("GetAddress from remote signer: %w", err)
+		return nil, nil, "", nil, fmt.Errorf("GetAddress from remote signer: %w", err)
 	}
 
-	kr, err := newRemoteSignerKeyring(keyName, pubKeyResp.PublicKey, signerClient)
+	kr, err := newRemoteSignerKeyring(keyName, pubKeyResp.PublicKey, signerClient, useSignTx)
 	if err != nil {
-		conn.Close()
-		return nil, nil, nil, err
+		return nil, nil, "", nil, err
 	}
 
 	accAddr, err := remoteSignerAccountAddress(kr.pubKey, addrResp.Address)
 	if err != nil {
-		conn.Close()
-		return nil, nil, nil, err
+		return nil, nil, "", nil, err
 	}
 
-	return kr, accAddr, conn, nil
+	// Best-effort: discover the chain ID from the signer so it does not have to be
+	// supplied separately. A signer built before the GetChainID RPC (or one with no
+	// chain ID configured) returns an error here; that is not fatal — the caller
+	// falls back to its own chain-ID source.
+	chainID := fetchRemoteSignerChainID(ctx, signerClient)
+
+	ok = true
+	return kr, accAddr, chainID, conn, nil
 }
 
+// fetchRemoteSignerChainID asks the remote signer for its configured chain ID.
+// It returns "" (and never an error) when the signer does not implement the
+// GetChainID RPC or has no chain ID configured, so chain-ID discovery stays
+// optional and backward compatible with older signers.
+func fetchRemoteSignerChainID(ctx context.Context, signerClient signerv1.BridgeSignerClient) string {
+	resp, err := signerClient.GetChainID(ctx, &signerv1.GetChainIDRequest{})
+	if err != nil {
+		return ""
+	}
+	return resp.ChainId
+}
+
+// remoteSignerAccountAddress parses the bech32 address the signer reported and verifies it
+// matches the fetched public key, so a misconfigured signer cannot make the reporter act on
+// the wrong account.
 func remoteSignerAccountAddress(pubKey cryptotypes.PubKey, bech32Addr string) (sdk.AccAddress, error) {
 	accAddr, err := sdk.AccAddressFromBech32(bech32Addr)
 	if err != nil {
 		return nil, fmt.Errorf("parse address %q from remote signer: %w", bech32Addr, err)
 	}
-
 	expectedAddr := sdk.AccAddress(pubKey.Address())
 	if !expectedAddr.Equals(accAddr) {
 		return nil, fmt.Errorf("remote signer address %q does not match fetched public key", bech32Addr)

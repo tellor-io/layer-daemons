@@ -30,7 +30,7 @@ func TestRemoteSignerAccountAddressRequiresPublicKeyMatch(t *testing.T) {
 }
 
 func TestRemoteSignerKeyringRejectsUnknownKeyName(t *testing.T) {
-	kr, err := newRemoteSignerKeyring("reporter", testCompressedPubKey(2), nil)
+	kr, err := newRemoteSignerKeyring("reporter", testCompressedPubKey(2), nil, false)
 	require.NoError(t, err)
 
 	_, err = kr.Key("other")

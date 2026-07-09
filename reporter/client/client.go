@@ -394,56 +394,9 @@ func (c *Client) Start(
 	c.logger.Info("CometBFT RPC client established", "endpoint", rpcEndpoint)
 	encodingConfig := CreateEncodingConfig()
 	c.cosmosCtx = c.cosmosCtx.WithCodec(encodingConfig.Codec).WithInterfaceRegistry(encodingConfig.InterfaceRegistry).WithTxConfig(encodingConfig.TxConfig)
-	remoteSignerAddr := viper.GetString("remote-signer-addr")
-	if remoteSignerAddr != "" {
-		// Use remote signer for tx signing — no local private key needed.
-		c.logger.Info("Using remote signer for tx signing", "addr", remoteSignerAddr)
-		caCert := viper.GetString("remote-signer-ca-cert")
-		clientCert := viper.GetString("remote-signer-client-cert")
-		clientKey := viper.GetString("remote-signer-client-key")
-		kr, signerAccAddr, signerConn, err := newKeyringFromRemoteSigner(ctx, keyName, remoteSignerAddr, caCert, clientCert, clientKey)
-		if err != nil {
-			return fmt.Errorf("failed to initialize remote signer keyring: %w", err)
-		}
-		// Store the connection so it gets closed during shutdown.
-		c.remoteSignerConn = signerConn
-		c.cosmosCtx = c.cosmosCtx.WithKeyring(kr)
-		c.cosmosCtx = c.cosmosCtx.WithFrom(keyName).WithFromName(keyName).WithFromAddress(signerAccAddr)
-	} else {
-		keyringInput, usingPasswordFile, err := keyringReader()
-		if err != nil {
-			return err
-		}
-		if err := validateKeyringBackendConfig(kb, usingPasswordFile); err != nil {
-			return err
-		}
-		c.logger.Info("Using keyring backend", "backend", kb)
-		kr, err := keyring.New("", kb, homeDir, keyringInput, encodingConfig.Codec)
-		if err != nil {
-			if usingPasswordFile {
-				return fmt.Errorf("%w: could not initialize keyring backend %q: %w", ErrKeyringPasswordFile, kb, err)
-			}
-			return fmt.Errorf("could not initialize keyring backend %q: %w", kb, err)
-		}
-		record, err := kr.Key(keyName)
-		if err != nil {
-			if usingPasswordFile {
-				return fmt.Errorf("%w: account %q could not be read from keyring backend %q: %w", ErrKeyringPasswordFile, keyName, kb, err)
-			}
-			return fmt.Errorf("account %q could not be read from keyring backend %q: %w", keyName, kb, err)
-		}
-		addr, err := record.GetAddress()
-		if err != nil {
-			return err
-		}
-		if usingPasswordFile {
-			if err := validateKeyringAccountUnlocked(kr, keyName); err != nil {
-				return err
-			}
-			c.logger.Info("KEYRING_PASSWORD_FILE unlocked keyring account successfully", "account", keyName, "address", addr.String())
-		}
-		c.cosmosCtx = c.cosmosCtx.WithKeyring(kr)
-		c.cosmosCtx = c.cosmosCtx.WithFrom(keyName).WithFromName(keyName).WithFromAddress(addr)
+
+	if err := c.setupKeyring(ctx, keyName, kb, homeDir, chainId, encodingConfig); err != nil {
+		return err
 	}
 	c.accAddr = c.cosmosCtx.GetFromAddress()
 
@@ -454,6 +407,75 @@ func (c *Client) Start(
 		&c.wg,
 	)
 
+	return nil
+}
+
+// setupKeyring wires the cosmos context's keyring, either to a remote signer
+// (SignTx allowlist, no local key) or to a local keyring backend.
+func (c *Client) setupKeyring(ctx context.Context, keyName, kb, homeDir, chainId string, encodingConfig EncodingConfig) error {
+	remoteSignerAddr := viper.GetString("remote-signer-addr")
+	if remoteSignerAddr != "" {
+		// Use remote signer for tx signing — no local private key needed.
+		c.logger.Info("Using remote signer for tx signing", "addr", remoteSignerAddr)
+		caCert := viper.GetString("remote-signer-ca-cert")
+		clientCert := viper.GetString("remote-signer-client-cert")
+		clientKey := viper.GetString("remote-signer-client-key")
+		// useSignTx=true: the always-on reporter signs through the scope-checked
+		// SignTx RPC (allowlisted message types only), never the blind SignRaw.
+		kr, signerAccAddr, signerChainID, signerConn, err := newKeyringFromRemoteSigner(ctx, keyName, remoteSignerAddr, caCert, clientCert, clientKey, true)
+		if err != nil {
+			return fmt.Errorf("failed to initialize remote signer keyring: %w", err)
+		}
+		// Store the connection so it gets closed during shutdown.
+		c.remoteSignerConn = signerConn
+		c.cosmosCtx = c.cosmosCtx.WithKeyring(kr)
+		c.cosmosCtx = c.cosmosCtx.WithFrom(keyName).WithFromName(keyName).WithFromAddress(signerAccAddr)
+		// Prefer the chain ID reported by the signer so it does not have to be supplied
+		// separately. If the signer does not provide one (older signer or none configured),
+		// keep the chain ID already detected from the node endpoints.
+		if signerChainID != "" {
+			if signerChainID != chainId {
+				c.logger.Info("Using chain ID from remote signer", "signer_chain_id", signerChainID, "detected_chain_id", chainId)
+			}
+			c.cosmosCtx = c.cosmosCtx.WithChainID(signerChainID)
+		}
+		return nil
+	}
+
+	keyringInput, usingPasswordFile, err := keyringReader()
+	if err != nil {
+		return err
+	}
+	if err := validateKeyringBackendConfig(kb, usingPasswordFile); err != nil {
+		return err
+	}
+	c.logger.Info("Using keyring backend", "backend", kb)
+	kr, err := keyring.New("", kb, homeDir, keyringInput, encodingConfig.Codec)
+	if err != nil {
+		if usingPasswordFile {
+			return fmt.Errorf("%w: could not initialize keyring backend %q: %w", ErrKeyringPasswordFile, kb, err)
+		}
+		return fmt.Errorf("could not initialize keyring backend %q: %w", kb, err)
+	}
+	record, err := kr.Key(keyName)
+	if err != nil {
+		if usingPasswordFile {
+			return fmt.Errorf("%w: account %q could not be read from keyring backend %q: %w", ErrKeyringPasswordFile, keyName, kb, err)
+		}
+		return fmt.Errorf("account %q could not be read from keyring backend %q: %w", keyName, kb, err)
+	}
+	addr, err := record.GetAddress()
+	if err != nil {
+		return err
+	}
+	if usingPasswordFile {
+		if err := validateKeyringAccountUnlocked(kr, keyName); err != nil {
+			return err
+		}
+		c.logger.Info("KEYRING_PASSWORD_FILE unlocked keyring account successfully", "account", keyName, "address", addr.String())
+	}
+	c.cosmosCtx = c.cosmosCtx.WithKeyring(kr)
+	c.cosmosCtx = c.cosmosCtx.WithFrom(keyName).WithFromName(keyName).WithFromAddress(addr)
 	return nil
 }
 
