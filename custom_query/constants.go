@@ -1,7 +1,5 @@
 package customquery
 
-import "github.com/tellor-io/layer-daemons/exchange_common"
-
 var StaticEndpointTemplateConfig = map[string]*EndpointTemplate{
 	"coingecko": {
 		URLTemplate:    "https://api.coingecko.com/api/v3/simple/price?ids={coin_id}&vs_currencies=usd",
@@ -156,39 +154,6 @@ var StaticQueriesConfig = map[string]*QueryConfig{
 			},
 		},
 	},
-	"59ae85cec665c779f18255dd4f3d97821e6a122691ee070b9a26888bc2a0e45a": {
-		ID:                "59ae85cec665c779f18255dd4f3d97821e6a122691ee070b9a26888bc2a0e45a",
-		AggregationMethod: "median",
-		MaxSpreadPercent:  10.0,
-		MinResponses:      2,
-		ResponseType:      "ufixed256x18",
-		Endpoints: []EndpointConfig{
-			{
-				EndpointType: "coingeckoPro",
-				ResponsePath: []string{"susds", "usd"},
-				Params: map[string]string{
-					"coin_id": "susds",
-				},
-				MarketId: "SUSDS-USD",
-			},
-			{
-				EndpointType: "coinpaprika",
-				ResponsePath: []string{"quotes", "USD", "price"},
-				Params: map[string]string{
-					"coin_id": "susds-susds",
-				},
-				MarketId: "SUSDS-USD",
-			},
-			{
-				EndpointType: "curve",
-				ResponsePath: []string{"data", "usd_price"},
-				Params: map[string]string{
-					"contract_address": "0xa3931d71877c0e7a3148cb7eb4463524fec27fbd",
-				},
-				MarketId: "SUSDS-USD",
-			},
-		},
-	},
 	"03731257e35c49e44b267640126358e5decebdd8f18b5e8f229542ec86e318cf": {
 		ID:                "03731257e35c49e44b267640126358e5decebdd8f18b5e8f229542ec86e318cf",
 		AggregationMethod: "median",
@@ -265,115 +230,6 @@ var StaticQueriesConfig = map[string]*QueryConfig{
 				Handler:      "wsteth_handler",
 				Chain:        "ethereum",
 				MarketId:     "WSTETH-USD",
-			},
-		},
-	},
-	"d62f132d9d04dde6e223d4366c48b47cd9f90228acdc6fa755dab93266db5176": {
-		ID:                "d62f132d9d04dde6e223d4366c48b47cd9f90228acdc6fa755dab93266db5176",
-		AggregationMethod: "median",
-		MaxSpreadPercent:  100.0,
-		MinResponses:      2,
-		ResponseType:      "ufixed256x18",
-		Endpoints: []EndpointConfig{
-			{
-				EndpointType: "coingeckoPro",
-				ResponsePath: []string{"lrt-squared", "usd"},
-				Params: map[string]string{
-					"coin_id": "lrt-squared",
-				},
-				MarketId: "KING-USD",
-			},
-			{
-				EndpointType: "coinmarketcap",
-				ResponsePath: []string{"data", "33695", "quote", "USD", "price"},
-				Params: map[string]string{
-					"id": "33695",
-					// "symbol": "KING",
-				},
-				MarketId: "KING-USD",
-			},
-			{
-				EndpointType: "uniswapV4ethereum",
-				ResponsePath: []string{"data", "token", "derivedETH"},
-				Params:       map[string]string{"token_address": "0x8f08b70456eb22f6109f57b8fafe862ed28e6040"},
-				UsdViaID:     exchange_common.ETHUSD_ID,
-				Invert:       false,
-				MarketId:     "KING-USD",
-			},
-		},
-	},
-	"611fd0e88850bf0cc036d96d04d47605c90b993485c2971e022b5751bbb04f23": {
-		ID:                "611fd0e88850bf0cc036d96d04d47605c90b993485c2971e022b5751bbb04f23",
-		AggregationMethod: "median",
-		MaxSpreadPercent:  100.0,
-		MinResponses:      2,
-		ResponseType:      "ufixed256x18",
-		Endpoints: []EndpointConfig{
-			{
-				EndpointType: "coingecko",
-				ResponsePath: []string{"stride-staked-atom", "usd"},
-				Params: map[string]string{
-					"coin_id": "stride-staked-atom",
-				},
-				MarketId: "stATOM-USD",
-			},
-			{
-				EndpointType: "coinmarketcap",
-				ResponsePath: []string{"data", "21686", "quote", "USD", "price"},
-				Params: map[string]string{
-					"id": "21686",
-					// "symbol": "stATOM",
-				},
-				MarketId: "stATOM-USD",
-			},
-			{
-				EndpointType: "osmosis",
-				Handler:      "osmosis_pool_price_handler",
-				ResponsePath: []string{"pool"},
-				Params: map[string]string{
-					"pool_id": "1136",
-				},
-				UsdViaID: exchange_common.ATOMUSD_ID,
-				Invert:   false,
-				MarketId: "stATOM-USD",
-			},
-		},
-	},
-	"187f74d310dc494e6efd928107713d4229cd319c2cf300224de02776090809f1": {
-		ID:                "187f74d310dc494e6efd928107713d4229cd319c2cf300224de02776090809f1",
-		AggregationMethod: "median",
-		MaxSpreadPercent:  100.0,
-		MinResponses:      1,
-		ResponseType:      "ufixed256x18",
-		Endpoints: []EndpointConfig{
-			{
-				EndpointType: "combined",
-				Handler:      "susn_price",
-				CombinedSources: map[string]string{
-					"ethereum":     "contract:ethereum",
-					"coinpaprika":  "rpc:coinpaprika",
-					"coingeckoPro": "rpc:coingeckoPro",
-					"uniswap":      "rpc:theGraphUniswapStylePool",
-				},
-				CombinedConfig: map[string]any{
-					"min_responses":              1,
-					"max_spread_percent":         100.0,
-					"coinpaprika_response_path":  []string{"quotes", "USD", "price"},
-					"coingeckoPro_response_path": []string{"noon-usn", "usd"},
-					"coingeckoPro_params": map[string]string{
-						"coin_id": "noon-usn",
-					},
-					"coinpaprika_params": map[string]string{
-						"coin_id": "usn1-noon-usn",
-					},
-					// USN/USDT pool on Uniswap V3 (USN=token0, USDT=token1).
-					// token1Price = USDT per USN ≈ USD per USN.
-					"uniswap_params": map[string]any{
-						"subgraph_id": "5zvR82QoaXYFyDEKLZ9t6v9adgnptxYpKpSbxtgVENFV",
-						"pool_id":     "0x526cd4f72f2cc54d6a02a7fefc84753a826a5737",
-					},
-					"uniswap_response_path": []string{"data", "pool", "token1Price"},
-				},
 			},
 		},
 	},
