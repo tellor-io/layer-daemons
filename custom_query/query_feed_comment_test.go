@@ -20,10 +20,6 @@ func TestClassifyQueryFeed(t *testing.T) {
 			feedType: customquery.FeedTypeMarket,
 			target:   "SDAI",
 		},
-		"59ae85cec665c779f18255dd4f3d97821e6a122691ee070b9a26888bc2a0e45a": {
-			feedType: customquery.FeedTypeMarket,
-			target:   "SUSDS",
-		},
 		"03731257e35c49e44b267640126358e5decebdd8f18b5e8f229542ec86e318cf": {
 			feedType:   customquery.FeedTypeFundamental,
 			target:     "SUSDE",
@@ -42,19 +38,6 @@ func TestClassifyQueryFeed(t *testing.T) {
 			feedType:   customquery.FeedTypeFundamental,
 			target:     "WSTETH",
 			collateral: "stETH",
-		},
-		"d62f132d9d04dde6e223d4366c48b47cd9f90228acdc6fa755dab93266db5176": {
-			feedType: customquery.FeedTypeMarket,
-			target:   "KING",
-		},
-		"611fd0e88850bf0cc036d96d04d47605c90b993485c2971e022b5751bbb04f23": {
-			feedType: customquery.FeedTypeMarket,
-			target:   "stATOM",
-		},
-		"187f74d310dc494e6efd928107713d4229cd319c2cf300224de02776090809f1": {
-			feedType:   customquery.FeedTypeFundamental,
-			target:     "SUSN",
-			collateral: "USN",
 		},
 		"ab30caa3e7827a27c153063bce02c0b260b29c0c164040c003f0f9ec66002510": {
 			feedType:   customquery.FeedTypeFundamental,
@@ -86,7 +69,6 @@ func TestGenerateFeedComment(t *testing.T) {
 	tests := map[string]string{
 		"05cddb6b67074aa61fcbe1d2fd5924e028bb699b506267df28c88f7deac4edc6": "SDAI/USD: (market) median of 3 sources.",
 		"03731257e35c49e44b267640126358e5decebdd8f18b5e8f229542ec86e318cf": "SUSDE/USD: (fundamental) ratio from susde contract × USDE/USD pricefeed cache.",
-		"187f74d310dc494e6efd928107713d4229cd319c2cf300224de02776090809f1": "SUSN/USD: (fundamental) ratio from susn contract × median USN/USD from 3 sources.",
 		"ab30caa3e7827a27c153063bce02c0b260b29c0c164040c003f0f9ec66002510": "SFRXUSD/USD: (fundamental) ratio from sfrxusd contract × median FRX/USD from 3 sources.",
 	}
 

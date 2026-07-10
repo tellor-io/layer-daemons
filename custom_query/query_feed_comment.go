@@ -43,11 +43,6 @@ var combinedHandlerLabel = map[string]string{
 	"sfrxusd_price": "sfrxusd contract",
 }
 
-// queryTargetAsset overrides inferred display names for specific query IDs.
-var queryTargetAsset = map[string]string{
-	"187f74d310dc494e6efd928107713d4229cd319c2cf300224de02776090809f1": "SUSN",
-}
-
 // ClassifyQueryFeed returns the feed type, target asset symbol, and collateral asset
 // (empty for market feeds).
 func ClassifyQueryFeed(q *QueryConfig) (feedType, targetAsset, collateral string) {
@@ -125,10 +120,6 @@ func countCombinedRPCSources(ep EndpointConfig) int {
 }
 
 func inferTargetAsset(q *QueryConfig) string {
-	if asset, ok := queryTargetAsset[q.ID]; ok {
-		return asset
-	}
-
 	for _, ep := range q.Endpoints {
 		if ep.MarketId != "" {
 			return marketIDToAsset(ep.MarketId)

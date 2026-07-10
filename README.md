@@ -44,6 +44,8 @@ Ethereum mainnet custom query contract reads use the built-in mainnet endpoint t
 
 Custom query API keys are read from the generated `custom_query_config.toml` entries that reference environment placeholders. The current built-in templates use `CMC_PRO_API_KEY`, `CGPRO_API_KEY`, and `SUBGRAPH_API_KEY`. Built-in Ethereum mainnet RPC URL templates also expand `INFURA_API_KEY` and `ALCHEMY_API_KEY` when `ETH_MAINNET_RPC_NODES` is not set (see [`env.example`](./env.example)).
 
+Custom query JSON API responses are cached briefly in memory to reduce duplicate upstream calls during fast cycle-list polling. Set `CUSTOM_QUERY_CACHE_TTL` to a Go duration such as `3s` or `500ms` to tune the freshness window. The default is `3s`; set it to `0` to disable this cache.
+
 ## Task loops
 
 ## PriceFetcher
@@ -150,6 +152,14 @@ Make sure the service `User` can read the file. When `KEYRING_PASSWORD_FILE` is 
 
 Set `REMOTE_SIGNER_ADDR` / `--remote-signer-addr` to delegate transaction signing to a bridge remote signer gRPC service instead of loading a local private key from the reporter keyring.
 
+Remote signer TLS can be configured with:
+
+| Flag | Environment | Description |
+|------|-------------|-------------|
+| `--remote-signer-ca-cert` | `REMOTE_SIGNER_CA_CERT` | CA certificate path for verifying the remote signer's TLS certificate. |
+| `--remote-signer-client-cert` | `REMOTE_SIGNER_CLIENT_CERT` | Client TLS certificate path for mTLS. |
+| `--remote-signer-client-key` | `REMOTE_SIGNER_CLIENT_KEY` | Client TLS private key path for mTLS. |
+
 When remote signing is enabled, `--from` / `FROM` is still required as the local account name used by the Cosmos client context, but the signing key and account address are fetched from the remote signer. Startup fails if the signer cannot be reached, does not return a 33-byte compressed secp256k1 public key, or returns a Tellor address that does not match that public key.
 
 Example:
@@ -161,6 +171,17 @@ RPC_NODES=tcp://your-rpc-host:26657 \
 REMOTE_SIGNER_ADDR=127.0.0.1:9191 \
 reporterd --from reporter
 ```
+
+## Dispute Monitor
+
+The dispute monitor is an optional failsafe that stops reporting while a non-ignored open dispute exists on the network. Enable it with `DISPUTE_MONITOR_ENABLED=true` and provide comma-separated Layer REST API URLs with `API_URLS`.
+
+| Environment | Default | Description |
+|-------------|---------|-------------|
+| `DISPUTE_MONITOR_ENABLED` | `false` | Enables the dispute monitor when set to `true`, `1`, `yes`, or `on`. |
+| `API_URLS` | `""` | Comma-separated Layer REST API URLs used to query open disputes. |
+| `DISPUTE_IGNORE_IDS` | `""` | Comma-separated dispute IDs that are safe to ignore. |
+| `DISPUTE_CHECK_INTERVAL` | `30s` | API polling interval as a Go duration. |
 
 ## Reward Withdrawals And Auto-Unbonding
 
