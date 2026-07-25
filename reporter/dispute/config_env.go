@@ -9,10 +9,13 @@ import (
 
 // LoadConfigFromEnv builds the dispute monitor config from environment variables:
 //
-//	DISPUTE_MONITOR_ENABLED   - "true"/"1"/"yes"/"on" to enable (default off)
-//	API_URLS                  - comma-separated Layer REST API URLs (open-disputes query)
-//	DISPUTE_IGNORE_IDS        - comma-separated dispute IDs to ignore
-//	DISPUTE_CHECK_INTERVAL    - API poll interval (e.g. 1s; default 1s)
+//	DISPUTE_MONITOR_ENABLED    - "true"/"1"/"yes"/"on" to enable (default off)
+//	API_URLS                   - comma-separated Layer REST API URLs (open-disputes query)
+//	DISPUTE_IGNORE_IDS         - comma-separated dispute IDs to ignore
+//	DISPUTE_CHECK_INTERVAL     - API poll interval (e.g. 1s; default 30s)
+//	DISPUTE_MIN_REPORTER_POWER - auto-ignore disputes against reports below this power (0=off)
+//	DISPUTE_TRIGGER_THRESHOLD  - qualifying open disputes needed to pause (default 1)
+//	DISPUTE_GRACE_PERIOD       - wait+re-evaluate before halting, e.g. 10m (0=pause now)
 //
 // rpcEndpoints are the daemon's resolved RPC nodes, used for new_dispute event subscription.
 func LoadConfigFromEnv(rpcEndpoints []string) Config {
@@ -39,6 +42,24 @@ func LoadConfigFromEnv(rpcEndpoints []string) Config {
 	if interval := os.Getenv("DISPUTE_CHECK_INTERVAL"); interval != "" {
 		if d, err := time.ParseDuration(interval); err == nil && d > 0 {
 			cfg.CheckInterval = d
+		}
+	}
+
+	if v := os.Getenv("DISPUTE_MIN_REPORTER_POWER"); v != "" {
+		if p, err := strconv.ParseUint(strings.TrimSpace(v), 10, 64); err == nil {
+			cfg.MinReporterPower = p
+		}
+	}
+
+	if v := os.Getenv("DISPUTE_TRIGGER_THRESHOLD"); v != "" {
+		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n > 0 {
+			cfg.TriggerThreshold = n
+		}
+	}
+
+	if v := os.Getenv("DISPUTE_GRACE_PERIOD"); v != "" {
+		if d, err := time.ParseDuration(strings.TrimSpace(v)); err == nil && d > 0 {
+			cfg.GracePeriod = d
 		}
 	}
 

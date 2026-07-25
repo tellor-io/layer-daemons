@@ -1,8 +1,16 @@
 // Package dispute implements the reporter's dispute failsafe: before the reporter starts
-// (and continuously after), it refuses to report while there is an open, non-ignored
-// dispute on the network. It monitors via both the chain API and new_dispute events, and
-// on any non-ignored open dispute it PANICS to exit the process — a robust failsafe that
-// stops reporting immediately. Opt-in via DISPUTE_MONITOR_ENABLED.
+// (and continuously after), it refuses to report while there are open, non-ignored disputes
+// on the network. It monitors via both the chain API and new_dispute events, and PANICS to
+// exit the process once the failsafe fires — a robust way to stop reporting immediately.
+// Opt-in via DISPUTE_MONITOR_ENABLED.
+//
+// To resist a low-cost griefing attack (stake 1 TRB, self-dispute, halt the whole reporter
+// network), the trigger is tunable (issue #47), all defaults preserving the original strict
+// behavior:
+//   - DISPUTE_MIN_REPORTER_POWER auto-ignores disputes against tiny-stake reports.
+//   - DISPUTE_TRIGGER_THRESHOLD requires N concurrent qualifying disputes before pausing.
+//   - DISPUTE_GRACE_PERIOD waits and re-evaluates before halting, resuming automatically if
+//     the disputes clear — so a transient or self-resolving dispute needs no operator action.
 //
 // Ported from the monitor's dispute package; the only design change is dropping the DB
 // failsafe in favor of new_dispute event subscription alongside the API check.
@@ -41,6 +49,20 @@ type Config struct {
 	RPCEndpoints   []string      // CometBFT RPC endpoints for new_dispute event subscription
 	IgnoreDisputes []uint64      // Dispute IDs that are safe to ignore
 	CheckInterval  time.Duration // How often the API poll re-checks (default 1s)
+
+	// Grief-prevention knobs (issue #47). Defaults preserve the original strict behavior:
+	// pause on the first open, non-ignored dispute, immediately.
+	//
+	//   - MinReporterPower: when > 0, disputes against a report whose power is below this are
+	//     auto-ignored, so a cheap self-dispute from a tiny stake can't halt the network.
+	//   - TriggerThreshold: number of qualifying open disputes required before pausing
+	//     (default 1). Set to 2+ so a single adversary's self-dispute does not halt reporting.
+	//   - GracePeriod: when > 0, on reaching the threshold the monitor waits this long and
+	//     re-evaluates; if the disputes clear (resolved or now ignorable) it resumes reporting
+	//     without operator intervention instead of halting.
+	MinReporterPower uint64        // DISPUTE_MIN_REPORTER_POWER (0 = disabled)
+	TriggerThreshold int           // DISPUTE_TRIGGER_THRESHOLD (default 1)
+	GracePeriod      time.Duration // DISPUTE_GRACE_PERIOD (0 = pause immediately)
 }
 
 type Monitor struct {
@@ -53,6 +75,9 @@ type Monitor struct {
 func New(logger log.Logger, cfg Config) *Monitor {
 	if cfg.CheckInterval <= 0 {
 		cfg.CheckInterval = defaultCheckInterval
+	}
+	if cfg.TriggerThreshold <= 0 {
+		cfg.TriggerThreshold = 1
 	}
 	return &Monitor{
 		cfg:        cfg,
@@ -96,15 +121,66 @@ func (m *Monitor) Run(ctx context.Context) {
 	}
 }
 
-// checkDisputes queries all API nodes and panics if any non-ignored dispute is open.
+// checkDisputes evaluates the open disputes and triggers the failsafe once the number of
+// qualifying disputes reaches TriggerThreshold. A qualifying dispute is open, not in the
+// ignore list, and — when MinReporterPower is set — against a report whose power is at or
+// above the threshold. Below-threshold counts keep reporting.
 func (m *Monitor) checkDisputes(ctx context.Context) {
-	for _, disputeID := range m.queryAllAPINodes(ctx, m.cfg.LayerAPIURLs) {
-		if !isIgnored(m.cfg.IgnoreDisputes, disputeID) {
-			m.logger.Error("OPEN DISPUTE DETECTED - PANIC", "dispute_id", disputeID, "ignored_ids", m.cfg.IgnoreDisputes)
-			panic(fmt.Sprintf("%s: dispute_id=%d", ReasonOpenDisputes, disputeID))
+	qualifying := m.qualifyingDisputes(ctx)
+	if len(qualifying) < m.cfg.TriggerThreshold {
+		if len(qualifying) > 0 {
+			m.logger.Warn("open disputes below trigger threshold - still reporting",
+				"qualifying", qualifying, "threshold", m.cfg.TriggerThreshold)
 		}
-		m.logger.Warn("open dispute found but ignored", "dispute_id", disputeID)
+		return
 	}
+	m.trigger(ctx, qualifying)
+}
+
+// qualifyingDisputes returns the open dispute IDs that count toward the failsafe: not
+// ignored, and — when MinReporterPower > 0 — disputing a report whose power is at or above
+// the threshold (grief protection: cheap disputes from tiny stakes are auto-ignored). If a
+// dispute's power cannot be read, it is counted, so an API hiccup fails safe toward pausing.
+func (m *Monitor) qualifyingDisputes(ctx context.Context) []uint64 {
+	var qualifying []uint64
+	for _, id := range m.queryAllAPINodes(ctx, m.cfg.LayerAPIURLs) {
+		if isIgnored(m.cfg.IgnoreDisputes, id) {
+			m.logger.Warn("open dispute found but ignored", "dispute_id", id)
+			continue
+		}
+		if m.cfg.MinReporterPower > 0 {
+			power, err := m.queryDisputePower(ctx, id)
+			switch {
+			case err != nil:
+				m.logger.Error("could not read disputed report power - counting dispute (fail safe)", "dispute_id", id, "error", err)
+			case power < m.cfg.MinReporterPower:
+				m.logger.Warn("dispute against low-power reporter auto-ignored", "dispute_id", id, "power", power, "min_power", m.cfg.MinReporterPower)
+				continue
+			}
+		}
+		qualifying = append(qualifying, id)
+	}
+	return qualifying
+}
+
+// trigger halts reporting when the failsafe fires. With a grace period it first waits and
+// re-evaluates: if the disputes clear (resolved, or now below threshold) it resumes reporting
+// without operator intervention; otherwise it panics to stop the reporter immediately.
+func (m *Monitor) trigger(ctx context.Context, qualifying []uint64) {
+	if m.cfg.GracePeriod > 0 {
+		m.logger.Warn("qualifying disputes reached trigger threshold - waiting grace period before halting",
+			"qualifying", qualifying, "threshold", m.cfg.TriggerThreshold, "grace_period", m.cfg.GracePeriod)
+		if !sleepCtx(ctx, m.cfg.GracePeriod) {
+			return
+		}
+		qualifying = m.qualifyingDisputes(ctx)
+		if len(qualifying) < m.cfg.TriggerThreshold {
+			m.logger.Info("disputes cleared during grace period - resuming reporting", "remaining", qualifying)
+			return
+		}
+	}
+	m.logger.Error("OPEN DISPUTES DETECTED - PANIC", "dispute_ids", qualifying, "threshold", m.cfg.TriggerThreshold, "ignored_ids", m.cfg.IgnoreDisputes)
+	panic(fmt.Sprintf("%s: dispute_ids=%v", ReasonOpenDisputes, qualifying))
 }
 
 // subscribeEvents keeps a best-effort new_dispute subscription; on any event it re-checks
@@ -237,6 +313,48 @@ func (m *Monitor) queryDisputesFromAPI(ctx context.Context, baseURL string) ([]u
 		return nil, fmt.Errorf("unexpected open-disputes response: missing openDisputes field")
 	}
 	return parsed.OpenDisputes.Ids, nil
+}
+
+// queryDisputePower returns the power of the report a dispute is challenging, from the first
+// API node that answers. Used for stake-weighted grief filtering.
+func (m *Monitor) queryDisputePower(ctx context.Context, id uint64) (uint64, error) {
+	lastErr := fmt.Errorf("no API URLs configured")
+	for _, baseURL := range m.cfg.LayerAPIURLs {
+		power, err := m.queryDisputePowerFromAPI(ctx, baseURL, id)
+		if err == nil {
+			return power, nil
+		}
+		lastErr = err
+	}
+	return 0, lastErr
+}
+
+func (m *Monitor) queryDisputePowerFromAPI(ctx context.Context, baseURL string, id uint64) (uint64, error) {
+	url := fmt.Sprintf("%s/tellor-io/layer/dispute/dispute/%d", strings.TrimRight(baseURL, "/"), id)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return 0, err
+	}
+	resp, err := m.httpClient.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("status %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 0, err
+	}
+	var parsed disputetypes.QueryDisputeResponse
+	if err := m.cdc.UnmarshalJSON(body, &parsed); err != nil {
+		return 0, fmt.Errorf("decode dispute response: %w", err)
+	}
+	if parsed.Dispute == nil || parsed.Dispute.Metadata == nil {
+		return 0, fmt.Errorf("unexpected dispute response: missing dispute/metadata")
+	}
+	return parsed.Dispute.Metadata.InitialEvidence.Power, nil
 }
 
 func isIgnored(ignoreList []uint64, disputeID uint64) bool {

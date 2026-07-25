@@ -2,10 +2,13 @@ package dispute
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -141,6 +144,87 @@ func TestErrorsOnMalformedResponse(t *testing.T) {
 	}
 }
 
+// serveDisputesWithPower routes /open-disputes to the ID list and /dispute/dispute/{id} to a
+// minimal per-dispute response carrying the given report power (for stake-filter tests).
+func serveDisputesWithPower(ids []uint64, powers map[uint64]uint64) *httptest.Server {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/open-disputes"):
+			_, _ = w.Write(mockOpenDisputesResponse(ids))
+		case strings.Contains(r.URL.Path, "/dispute/dispute/"):
+			parts := strings.Split(r.URL.Path, "/")
+			id, _ := strconv.ParseUint(parts[len(parts)-1], 10, 64)
+			_, _ = w.Write([]byte(fmt.Sprintf(
+				`{"dispute":{"disputeId":"%d","metadata":{"open":true,"initialEvidence":{"power":"%d"}}}}`, id, powers[id])))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+}
+
+// TestTriggerThreshold: a single open dispute must not halt reporting when the threshold is 2,
+// but two concurrent disputes must. This defeats a single adversary's self-dispute (issue #47).
+func TestTriggerThreshold(t *testing.T) {
+	one := serveDisputes([]uint64{1})
+	defer one.Close()
+	if panicked, msg := runExpectPanic(t, Config{LayerAPIURLs: []string{one.URL}, TriggerThreshold: 2, CheckInterval: queryInterval}); panicked {
+		t.Fatalf("panicked with 1 dispute under threshold 2: %q", msg)
+	}
+	two := serveDisputes([]uint64{1, 2})
+	defer two.Close()
+	if panicked, _ := runExpectPanic(t, Config{LayerAPIURLs: []string{two.URL}, TriggerThreshold: 2, CheckInterval: queryInterval}); !panicked {
+		t.Fatal("expected panic with 2 disputes at threshold 2")
+	}
+}
+
+// TestStakeWeightedFiltering: a dispute against a below-threshold (griefing) report is
+// auto-ignored, while one against a high-power report still halts reporting (issue #47).
+func TestStakeWeightedFiltering(t *testing.T) {
+	low := serveDisputesWithPower([]uint64{1}, map[uint64]uint64{1: 50})
+	defer low.Close()
+	if panicked, msg := runExpectPanic(t, Config{LayerAPIURLs: []string{low.URL}, MinReporterPower: 100, CheckInterval: queryInterval}); panicked {
+		t.Fatalf("panicked on a low-power (griefing) dispute: %q", msg)
+	}
+	high := serveDisputesWithPower([]uint64{1}, map[uint64]uint64{1: 500})
+	defer high.Close()
+	if panicked, _ := runExpectPanic(t, Config{LayerAPIURLs: []string{high.URL}, MinReporterPower: 100, CheckInterval: queryInterval}); !panicked {
+		t.Fatal("expected panic on a high-power dispute")
+	}
+}
+
+// TestGracePeriodHaltsIfPersists: when the dispute is still open after the grace period, the
+// failsafe still halts.
+func TestGracePeriodHaltsIfPersists(t *testing.T) {
+	srv := serveDisputes([]uint64{7})
+	defer srv.Close()
+	if panicked, _ := runExpectPanic(t, Config{LayerAPIURLs: []string{srv.URL}, GracePeriod: 80 * time.Millisecond, CheckInterval: queryInterval}); !panicked {
+		t.Fatal("expected panic after grace period when the dispute persists")
+	}
+}
+
+// TestGracePeriodResumes: a dispute that clears during the grace period lets reporting resume
+// automatically, with no panic and no operator intervention (issue #47).
+func TestGracePeriodResumes(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if !strings.HasSuffix(r.URL.Path, "/open-disputes") {
+			http.NotFound(w, r)
+			return
+		}
+		if calls.Add(1) == 1 { // open on the first poll, cleared thereafter
+			_, _ = w.Write(mockOpenDisputesResponse([]uint64{7}))
+			return
+		}
+		_, _ = w.Write(mockOpenDisputesResponse(nil))
+	}))
+	defer srv.Close()
+	if panicked, msg := runExpectPanic(t, Config{LayerAPIURLs: []string{srv.URL}, GracePeriod: 80 * time.Millisecond, CheckInterval: queryInterval}); panicked {
+		t.Fatalf("expected resume (no panic) when disputes clear during grace: %q", msg)
+	}
+}
+
 func TestIsIgnored(t *testing.T) {
 	if !isIgnored([]uint64{1, 2, 3}, 2) {
 		t.Fatal("2 should be ignored")
@@ -165,6 +249,9 @@ func TestLoadConfigFromEnv(t *testing.T) {
 	t.Setenv("API_URLS", "http://a:1317, http://b:1317")
 	t.Setenv("DISPUTE_IGNORE_IDS", "5, 9")
 	t.Setenv("DISPUTE_CHECK_INTERVAL", "3s")
+	t.Setenv("DISPUTE_MIN_REPORTER_POWER", "1000")
+	t.Setenv("DISPUTE_TRIGGER_THRESHOLD", "2")
+	t.Setenv("DISPUTE_GRACE_PERIOD", "10m")
 	cfg := LoadConfigFromEnv([]string{"tcp://rpc:26657"})
 	if !cfg.Enabled {
 		t.Fatal("expected enabled")
@@ -180,5 +267,14 @@ func TestLoadConfigFromEnv(t *testing.T) {
 	}
 	if len(cfg.RPCEndpoints) != 1 {
 		t.Fatalf("rpc: %v", cfg.RPCEndpoints)
+	}
+	if cfg.MinReporterPower != 1000 {
+		t.Fatalf("min power: %d", cfg.MinReporterPower)
+	}
+	if cfg.TriggerThreshold != 2 {
+		t.Fatalf("threshold: %d", cfg.TriggerThreshold)
+	}
+	if cfg.GracePeriod != 10*time.Minute {
+		t.Fatalf("grace: %v", cfg.GracePeriod)
 	}
 }
