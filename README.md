@@ -185,7 +185,9 @@ The dispute monitor is an optional failsafe that stops reporting while a non-ign
 
 ## Reward Withdrawals And Auto-Unbonding
 
-The reporter periodically withdraws earned tips/rewards with `MsgWithdrawTip`. The interval is configured by `WITHDRAW_FREQUENCY` in seconds and defaults to `43200` (12 hours). By default, the validator operator address is derived from the reporter account address. If the reporter account is delegated to a different validator, set `REPORTERS_VALIDATOR_ADDRESS` to that validator's `tellorvaloper...` address.
+The reporter periodically withdraws earned tips/rewards with `MsgWithdrawTip`. Before staking rewards, it compares the projected reporter stake (current power plus available tips) with the total bonded token pool. If the projected share exceeds `--withdraw-to-wallet-power-threshold` (default `0.295`), it uses `MsgWithdrawTipToBalance` instead. Set `--withdraw-to-wallet=true` to always use `MsgWithdrawTipToBalance`.
+
+The interval is configured by `WITHDRAW_FREQUENCY` in seconds and defaults to `43200` (12 hours). By default, the validator operator address is derived from the reporter account address. If the reporter account is delegated to a different validator, set `REPORTERS_VALIDATOR_ADDRESS` to that validator's `tellorvaloper...` address.
 
 Auto-unbonding is optional and can be configured by CLI flags or equivalent environment variables:
 
@@ -194,6 +196,8 @@ Auto-unbonding is optional and can be configured by CLI flags or equivalent envi
 | `--auto-unbonding-frequency` | `AUTO_UNBONDING_FREQUENCY` | uint32 | `0` | Enables unbonding every N days (`0` = disabled, valid enabled range is 1-21). |
 | `--auto-unbonding-amount` | `AUTO_UNBONDING_AMOUNT` | uint32 | `0` | Amount of `loya` to unbond each time. Required when frequency is enabled. |
 | `--auto-unbonding-max-stake-percentage` | `AUTO_UNBONDING_MAX_STAKE_PERCENTAGE` | decimal string | `0.0` | Optional cap from `0.0` to `1.0`; if the configured amount exceeds this share of stake, the unbond is skipped. |
+| `--withdraw-to-wallet` | `WITHDRAW_TO_WALLET` | bool | `false` | Always withdraw rewards toward the wallet balance instead of staking them. |
+| `--withdraw-to-wallet-power-threshold` | `WITHDRAW_TO_WALLET_POWER_THRESHOLD` | decimal string | `0.295` | Withdraw rewards toward the wallet when projected reporter stake exceeds this share of total bonded tokens. |
 
 Gas estimates are cached per transaction type. `--refresh-gas-estimates-interval` / `REFRESH_GAS_ESTIMATES_INTERVAL` resets cached estimates and gas-adjustment levels periodically; it defaults to `12h`, and values `<=0` disable the refresh loop.
 

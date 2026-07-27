@@ -1,11 +1,16 @@
 package client
 
 import (
+	"context"
 	"testing"
 
+	"cosmossdk.io/math"
+	"github.com/spf13/viper"
 	"github.com/stretchr/testify/require"
+	layertypes "github.com/tellor-io/layer/types"
 
 	"github.com/cosmos/cosmos-sdk/types/bech32"
+	"github.com/tellor-io/layer-daemons/flags"
 )
 
 func TestValidatorOperatorAddressDerivesFromReporterWhenUnset(t *testing.T) {
@@ -46,6 +51,34 @@ func TestValidatorOperatorAddressRejectsInvalidOverrideAddress(t *testing.T) {
 
 	require.Error(t, err)
 	require.ErrorContains(t, err, reportersValidatorAddressEnv)
+}
+
+func TestShouldWithdrawTipsToWalletFlagBypassesQueries(t *testing.T) {
+	viper.Set(flags.FlagWithdrawToWallet, true)
+	t.Cleanup(func() { viper.Set(flags.FlagWithdrawToWallet, false) })
+
+	withdrawToWallet, err := (&Client{}).shouldWithdrawTipsToWallet(context.Background())
+
+	require.NoError(t, err)
+	require.True(t, withdrawToWallet)
+}
+
+func TestProjectedReporterShareExceeds(t *testing.T) {
+	totalBonded := layertypes.PowerReduction.MulRaw(1_000)
+	threshold := math.LegacyMustNewDecFromStr("0.295")
+
+	require.False(t, projectedReporterShareExceeds(
+		294,
+		math.LegacyNewDecFromInt(layertypes.PowerReduction),
+		totalBonded,
+		threshold,
+	), "exactly 29.5 percent should continue staking")
+	require.True(t, projectedReporterShareExceeds(
+		294,
+		math.LegacyNewDecFromInt(layertypes.PowerReduction.AddRaw(1)),
+		totalBonded,
+		threshold,
+	), "more than 29.5 percent should withdraw to wallet")
 }
 
 func testBech32Address(t *testing.T, prefix string, seed byte) string {

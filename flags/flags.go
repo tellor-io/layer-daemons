@@ -21,6 +21,10 @@ const (
 	FlagAutoBalanceToKeep          = "auto-balance-to-keep"
 	FlagAutoBalanceExecutionTime   = "auto-balance-execution-time"
 	FlagAutoBalanceBridgeToEthAddr = "auto-balance-bridge-to-eth-addr"
+
+	FlagWithdrawToWallet                  = "withdraw-to-wallet"
+	FlagWithdrawToWalletPowerThreshold    = "withdraw-to-wallet-power-threshold"
+	DefaultWithdrawToWalletPowerThreshold = "0.295"
 )
 
 // Shared flags contains configuration flags shared by all daemons.
