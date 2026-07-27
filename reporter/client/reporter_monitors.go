@@ -401,11 +401,11 @@ func (c *Client) MonitorForTippedQueries(ctx context.Context, wg *sync.WaitGroup
 				haveCommited := commitedIds[query.Id]
 				mutex.Unlock()
 				if height > query.Expiration || haveCommited ||
-					!strings.EqualFold(queryType, "SpotPrice") && !strings.EqualFold(queryType, "TRBBridge") {
+					!strings.EqualFold(queryType, "SpotPrice") && !strings.EqualFold(queryType, "TRBBridgeV2") {
 					continue
 				}
 
-				if strings.EqualFold(queryType, "TRBBridge") {
+				if strings.EqualFold(queryType, "TRBBridgeV2") {
 					mutex.Lock()
 					haveCommitedTip := depositTipMap[query.Id]
 					mutex.Unlock()
