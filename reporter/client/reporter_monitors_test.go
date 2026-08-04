@@ -4,13 +4,14 @@ import (
 	"context"
 	"testing"
 
-	"cosmossdk.io/math"
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/require"
+	"github.com/tellor-io/layer-daemons/flags"
 	layertypes "github.com/tellor-io/layer/types"
 
+	"cosmossdk.io/math"
+
 	"github.com/cosmos/cosmos-sdk/types/bech32"
-	"github.com/tellor-io/layer-daemons/flags"
 )
 
 func TestValidatorOperatorAddressDerivesFromReporterWhenUnset(t *testing.T) {

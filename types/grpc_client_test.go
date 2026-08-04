@@ -3,9 +3,10 @@ package types
 import (
 	"testing"
 
-	"cosmossdk.io/math"
 	"github.com/stretchr/testify/require"
 	reportertypes "github.com/tellor-io/layer/x/reporter/types"
+
+	"cosmossdk.io/math"
 )
 
 func TestGogoProtoCodecRoundTripsAvailableTips(t *testing.T) {

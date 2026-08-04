@@ -5,11 +5,10 @@ import (
 	"fmt"
 	"net"
 
+	gogoproto "github.com/cosmos/gogoproto/proto"
 	"github.com/tellor-io/layer-daemons/constants"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
-
-	gogoproto "github.com/cosmos/gogoproto/proto"
 )
 
 // GrpcClientImpl is the struct that implements the `GrpcClient` interface.
