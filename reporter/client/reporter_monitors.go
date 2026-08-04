@@ -17,6 +17,7 @@ import (
 	"github.com/spf13/viper"
 	"github.com/tellor-io/layer-daemons/flags"
 	tokenbridgetipstypes "github.com/tellor-io/layer-daemons/server/types/token_bridge_tips"
+	layertypes "github.com/tellor-io/layer/types"
 	bridgetypes "github.com/tellor-io/layer/x/bridge/types"
 	oracletypes "github.com/tellor-io/layer/x/oracle/types"
 	reportertypes "github.com/tellor-io/layer/x/reporter/types"
@@ -463,13 +464,33 @@ func (c *Client) WithdrawAndStakeEarnedRewardsPeriodically(ctx context.Context, 
 		default:
 		}
 
+		withdrawToWallet, err := c.shouldWithdrawTipsToWallet(ctx)
+		if err != nil {
+			c.logger.Error("could not determine reward withdrawal destination", "error", err)
+			if !waitForRewardWithdrawal(ctx, frequency) {
+				return
+			}
+			continue
+		}
+
+		if withdrawToWallet {
+			c.trySend(ctx, TxChannelInfo{
+				Msg:         &reportertypes.MsgWithdrawTipToBalance{SelectorAddress: c.accAddr.String()},
+				isBridge:    false,
+				NumRetries:  0,
+				QueryMetaId: 0,
+			})
+			if !waitForRewardWithdrawal(ctx, frequency) {
+				return
+			}
+			continue
+		}
+
 		valAddr, valAddrSource, err := validatorOperatorAddress(c.accAddr.String())
 		if err != nil {
 			c.logger.Error("could not resolve validator operator address", "error", err)
-			select {
-			case <-ctx.Done():
+			if !waitForRewardWithdrawal(ctx, frequency) {
 				return
-			case <-time.After(time.Duration(frequency) * time.Second):
 			}
 			continue
 		}
@@ -481,11 +502,86 @@ func (c *Client) WithdrawAndStakeEarnedRewardsPeriodically(ctx context.Context, 
 		}
 		c.trySend(ctx, TxChannelInfo{Msg: withdrawMsg, isBridge: false, NumRetries: 0, QueryMetaId: 0})
 
-		select {
-		case <-ctx.Done():
+		if !waitForRewardWithdrawal(ctx, frequency) {
 			return
-		case <-time.After(time.Duration(frequency) * time.Second):
 		}
+	}
+}
+
+func (c *Client) shouldWithdrawTipsToWallet(ctx context.Context) (bool, error) {
+	if viper.GetBool(flags.FlagWithdrawToWallet) {
+		return true, nil
+	}
+
+	thresholdValue := viper.GetString(flags.FlagWithdrawToWalletPowerThreshold)
+	if thresholdValue == "" {
+		thresholdValue = flags.DefaultWithdrawToWalletPowerThreshold
+	}
+	threshold, err := math.LegacyNewDecFromStr(thresholdValue)
+	if err != nil {
+		return false, fmt.Errorf("invalid withdrawal power threshold: %w", err)
+	}
+
+	var reporterResp *reportertypes.QueryReporterResponse
+	if err := c.withGRPCFallback(ctx, "reporter power lookup", func() error {
+		var err error
+		reporterResp, err = c.ReporterClient.Reporter(ctx, &reportertypes.QueryReporterRequest{
+			ReporterAddress: c.accAddr.String(),
+		})
+		return err
+	}); err != nil {
+		return false, err
+	}
+
+	var tipsResp *reportertypes.QueryAvailableTipsResponse
+	if err := c.withGRPCFallback(ctx, "available tips lookup", func() error {
+		var err error
+		tipsResp, err = c.ReporterClient.AvailableTips(ctx, &reportertypes.QueryAvailableTipsRequest{
+			SelectorAddress: c.accAddr.String(),
+		})
+		return err
+	}); err != nil {
+		return false, err
+	}
+
+	var poolResp *stakingtypes.QueryPoolResponse
+	if err := c.withGRPCFallback(ctx, "staking pool lookup", func() error {
+		var err error
+		poolResp, err = c.StakingClient.Pool(ctx, &stakingtypes.QueryPoolRequest{})
+		return err
+	}); err != nil {
+		return false, err
+	}
+
+	withdrawToWallet := projectedReporterShareExceeds(
+		reporterResp.Reporter.Power,
+		tipsResp.AvailableTips,
+		poolResp.Pool.BondedTokens,
+		threshold,
+	)
+	if withdrawToWallet {
+		c.logger.Info(
+			"Projected reporter power exceeds withdrawal threshold; withdrawing rewards to wallet",
+			"reporter_power", reporterResp.Reporter.Power,
+			"available_tips", tipsResp.AvailableTips.String(),
+			"bonded_tokens", poolResp.Pool.BondedTokens.String(),
+			"threshold", threshold.String(),
+		)
+	}
+	return withdrawToWallet, nil
+}
+
+func projectedReporterShareExceeds(reporterPower uint64, tips math.LegacyDec, totalBonded math.Int, threshold math.LegacyDec) bool {
+	projectedStake := math.NewIntFromUint64(reporterPower).Mul(layertypes.PowerReduction).Add(tips.TruncateInt())
+	return projectedStake.ToLegacyDec().GT(totalBonded.ToLegacyDec().Mul(threshold))
+}
+
+func waitForRewardWithdrawal(ctx context.Context, frequency int) bool {
+	select {
+	case <-ctx.Done():
+		return false
+	case <-time.After(time.Duration(frequency) * time.Second):
+		return true
 	}
 }
 
