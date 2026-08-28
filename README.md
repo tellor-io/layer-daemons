@@ -46,6 +46,8 @@ Custom query API keys are read from the generated `custom_query_config.toml` ent
 
 Custom query JSON API responses are cached briefly in memory to reduce duplicate upstream calls during fast cycle-list polling. Set `CUSTOM_QUERY_CACHE_TTL` to a Go duration such as `3s` or `500ms` to tune the freshness window. The default is `3s`; set it to `0` to disable this cache.
 
+The full custom-query fetch is limited to five seconds by default. Set `CUSTOM_QUERY_FETCH_TIMEOUT` to a positive Go duration such as `2s` to preserve more of the reporting window for transaction submission when an optional source is slow.
+
 ## Task loops
 
 ## PriceFetcher

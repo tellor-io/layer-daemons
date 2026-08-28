@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -18,6 +19,25 @@ import (
 
 	"github.com/cosmos/cosmos-sdk/telemetry"
 )
+
+const (
+	customQueryFetchTimeoutEnv     = "CUSTOM_QUERY_FETCH_TIMEOUT"
+	defaultCustomQueryFetchTimeout = 5 * time.Second
+)
+
+func customQueryFetchTimeout() time.Duration {
+	rawTimeout := strings.TrimSpace(os.Getenv(customQueryFetchTimeoutEnv))
+	if rawTimeout == "" {
+		return defaultCustomQueryFetchTimeout
+	}
+
+	timeout, err := time.ParseDuration(rawTimeout)
+	if err != nil || timeout <= 0 {
+		return defaultCustomQueryFetchTimeout
+	}
+
+	return timeout
+}
 
 // Result holds the value returned from an endpoint
 type Result struct {
@@ -65,8 +85,8 @@ func FetchPrice(
 	query QueryConfig,
 	priceCache *pricefeedservertypes.MarketToExchangePrices,
 ) (*FetchPriceResult, error) {
-	// Create a context with timeout
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	// Bound the full fetch so reporting still has time to submit before the cycle closes.
+	ctx, cancel := context.WithTimeout(ctx, customQueryFetchTimeout())
 	defer cancel()
 
 	totalEndpoints := len(query.RpcReaders) + len(query.ContractReaders) + len(query.CombinedReaders)
