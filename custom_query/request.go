@@ -6,7 +6,6 @@ import (
 	"math"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	gometrics "github.com/hashicorp/go-metrics"
@@ -65,77 +64,119 @@ func FetchPrice(
 	query QueryConfig,
 	priceCache *pricefeedservertypes.MarketToExchangePrices,
 ) (*FetchPriceResult, error) {
-	// Create a context with timeout
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	fetchCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	totalEndpoints := len(query.RpcReaders) + len(query.ContractReaders) + len(query.CombinedReaders)
-	results := make(chan Result, totalEndpoints)
-	var wg sync.WaitGroup
+	deadline := collectionDeadline(ctx, query)
+	if !deadline.IsZero() && deadline.After(time.Now()) {
+		var deadlineCancel context.CancelFunc
+		fetchCtx, deadlineCancel = context.WithDeadline(fetchCtx, deadline)
+		defer deadlineCancel()
+	}
 
-	// Launch goroutines for contract endpoints
+	totalEndpoints := len(query.RpcReaders) + len(query.ContractReaders) + len(query.CombinedReaders)
+	if totalEndpoints == 0 {
+		return nil, fmt.Errorf("no endpoints configured for query %s", query.ID)
+	}
+
+	results := make(chan Result, totalEndpoints)
+
 	for _, contractEndpoint := range query.ContractReaders {
-		wg.Add(1)
 		go func(ep ContractHandler) {
-			defer wg.Done()
-			result := fetchFromContractEndpoint(ctx, ep, priceCache)
-			results <- result
+			results <- fetchFromContractEndpoint(fetchCtx, ep, priceCache)
 		}(contractEndpoint)
 	}
-	// Launch goroutines for REST API endpoints
 	for _, rpchandler := range query.RpcReaders {
-		wg.Add(1)
 		go func(ep RpcHandler) {
-			defer wg.Done()
-			result := fetchFromRpcEndpoint(ctx, ep, priceCache)
-			results <- result
+			results <- fetchFromRpcEndpoint(fetchCtx, ep, priceCache)
 		}(rpchandler)
-
 	}
-	// Launch goroutines for combined endpoints
 	for _, combinedHandler := range query.CombinedReaders {
-		wg.Add(1)
 		go func(ep CombinedHandler) {
-			defer wg.Done()
-			result := fetchFromCombinedEndpoint(ctx, ep, priceCache)
-			results <- result
+			results <- fetchFromCombinedEndpoint(fetchCtx, ep, priceCache)
 		}(combinedHandler)
 	}
-	// Close results channel when all goroutines complete
-	go func() {
-		wg.Wait()
-		close(results)
-	}()
 
-	// Collect results
+	timer := time.NewTimer(maxDuration(time.Until(deadline), 0))
+	defer timer.Stop()
+
 	var allResults []Result
-	// Count successful results
 	var successfulResults []Result
-	for result := range results {
-		allResults = append(allResults, result)
-		if result.Err == nil {
-			successfulResults = append(successfulResults, result)
-			// Emit metrics for successful results
-			emitPriceForTelemetry(result, query)
-			emitSuccessForTelemetry(result, query)
-		} else {
-			// Emit error metrics for failed results
-			emitErrorForTelemetry(result, query)
+	pending := totalEndpoints
+
+collectLoop:
+	for pending > 0 {
+		select {
+		case result := <-results:
+			pending--
+			allResults = append(allResults, result)
+			if result.Err == nil {
+				successfulResults = append(successfulResults, result)
+				emitPriceForTelemetry(result, query)
+				emitSuccessForTelemetry(result, query)
+			} else {
+				emitErrorForTelemetry(result, query)
+			}
+
+			if pending == 0 && len(successfulResults) >= query.MinResponses {
+				cancel()
+				return finalizeFetch(allResults, successfulResults, query, totalEndpoints)
+			}
+
+		case <-timer.C:
+			cancel()
+			break collectLoop
+
+		case <-fetchCtx.Done():
+			if ctx.Err() != nil {
+				break collectLoop
+			}
 		}
 	}
-	// Check if we have enough successful responses
-	if len(successfulResults) < query.MinResponses {
-		return fetchPriceResultFromCollected(allResults, successfulResults, query, totalEndpoints, ""),
-			fmt.Errorf("insufficient successful responses: got %d, need %d",
-				len(successfulResults), query.MinResponses)
+
+	for {
+		select {
+		case result := <-results:
+			allResults = append(allResults, result)
+			if result.Err == nil {
+				successfulResults = append(successfulResults, result)
+				emitPriceForTelemetry(result, query)
+				emitSuccessForTelemetry(result, query)
+			} else {
+				emitErrorForTelemetry(result, query)
+			}
+		default:
+			goto doneCollect
+		}
 	}
-	fmt.Println("Successful results:", successfulResults)
-	// Aggregate results
+doneCollect:
+
+	if len(successfulResults) >= query.MinResponses {
+		return finalizeFetch(allResults, successfulResults, query, totalEndpoints)
+	}
+
+	return fetchPriceResultFromCollected(allResults, successfulResults, query, totalEndpoints, ""),
+		fmt.Errorf("insufficient successful responses: got %d, need %d",
+			len(successfulResults), query.MinResponses)
+}
+
+func maxDuration(a, b time.Duration) time.Duration {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func finalizeFetch(
+	allResults []Result,
+	successfulResults []Result,
+	query QueryConfig,
+	totalEndpoints int,
+) (*FetchPriceResult, error) {
 	aggregatedValue, err := aggregateResults(successfulResults, query.AggregationMethod, query.ResponseType, query.MaxSpreadPercent)
 	if err != nil {
 		return fetchPriceResultFromCollected(allResults, successfulResults, query, totalEndpoints, ""), err
 	}
-
 	return fetchPriceResultFromCollected(allResults, successfulResults, query, totalEndpoints, aggregatedValue), nil
 }
 
@@ -208,7 +249,6 @@ func fetchFromContractEndpoint(
 
 	defer contractReader.Reader.Close()
 
-	fmt.Println("Contract value:", value)
 	return Result{
 		Value:      value,
 		EndpointID: "contract:" + contractReader.Handler,
@@ -318,7 +358,6 @@ func fetchFromCombinedEndpoint(
 		defer reader.Close()
 	}
 
-	fmt.Println("Combined value:", value)
 	return Result{
 		Value:      value,
 		EndpointID: "combined:" + combinedReader.Handler,

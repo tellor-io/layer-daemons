@@ -35,6 +35,7 @@ type Config struct {
 	Endpoints    map[string]EndpointTemplate    `toml:"endpoints"`
 	RPCEndpoints map[string]RPCEndpointTemplate `toml:"rpc_endpoints"`
 	Queries      map[string]QueryConfig         `toml:"queries"`
+	Defaults     map[string]TimeoutDefaults     `toml:"defaults"`
 }
 
 type ContractHandler struct {
@@ -67,12 +68,18 @@ type CombinedHandler struct {
 	MaxDataAge       time.Duration
 }
 type QueryConfig struct {
-	ID                string            `toml:"id"`
-	AggregationMethod string            `toml:"aggregation_method"`
-	MinResponses      int               `toml:"min_responses"`
-	ResponseType      string            `toml:"response_type"`
-	MaxSpreadPercent  float64           `toml:"max_spread_percent"`
-	Endpoints         []EndpointConfig  `toml:"endpoints"`
+	ID                  string            `toml:"id"`
+	QueryType           string            `toml:"query_type"`
+	AggregationMethod   string            `toml:"aggregation_method"`
+	MinResponses        int               `toml:"min_responses"`
+	ResponseType        string            `toml:"response_type"`
+	MaxSpreadPercent    float64           `toml:"max_spread_percent"`
+	FetchTimeoutMs      int               `toml:"fetch_timeout_ms"`
+	PerSourceTimeoutMs  int               `toml:"per_source_timeout_ms"`
+	MaxSourceRetries    int               `toml:"max_source_retries"`
+	PostFetchReserveMs  int               `toml:"post_fetch_reserve_ms"`
+	AggregationBufferMs int               `toml:"aggregation_buffer_ms"`
+	Endpoints           []EndpointConfig  `toml:"endpoints"`
 	ContractReaders   []ContractHandler `toml:"-"`
 	RpcReaders        []RpcHandler      `toml:"-"`
 	CombinedReaders   []CombinedHandler `toml:"-"`
@@ -126,8 +133,11 @@ func BuildQueryEndpoints(homeDir, localDir, file string) (map[string]QueryConfig
 	processApiKeys(&config)
 	time.Sleep(2 * time.Second) // brief pause for readability
 
+	timeoutDefaults := mergedConfigDefaults(config.Defaults)
+
 	// for each query in the query map, build the endpoints
 	for _, query := range config.Queries {
+		query = ResolveQueryTimeouts(query, timeoutDefaults)
 		contractReaders := make([]ContractHandler, 0)
 		rpcReaders := make([]RpcHandler, 0)
 		combinedReaders := make([]CombinedHandler, 0)
@@ -150,7 +160,7 @@ func BuildQueryEndpoints(homeDir, localDir, file string) (map[string]QueryConfig
 							return nil, fmt.Errorf("no RPC endpoints configured for chain %s in combined source %s for query %s",
 								chain, sourceName, query.ID)
 						}
-						reader, err := contractreader.NewReader(urls, 3)
+						reader, err := contractreader.NewReader(urls, perSourceTimeoutMs(query), maxSourceRetries(query))
 						if err != nil {
 							return nil, fmt.Errorf("failed to create contract reader for combined source %s in query %s: %w",
 								sourceName, query.ID, err)
@@ -213,8 +223,12 @@ func BuildQueryEndpoints(homeDir, localDir, file string) (map[string]QueryConfig
 								}
 							}
 
+							timeout := template.Timeout
+							if query.PerSourceTimeoutMs > 0 {
+								timeout = query.PerSourceTimeoutMs
+							}
 							reader, err := rpcreader.NewReader(url, template.Method, processedQuery,
-								processedHeaders, responsePath, template.Timeout, sourceParams)
+								processedHeaders, responsePath, timeout, sourceParams, maxSourceRetries(query))
 							if err != nil {
 								return nil, fmt.Errorf("failed to create RPC reader for combined source %s in query %s: %w",
 									sourceName, query.ID, err)
@@ -269,7 +283,7 @@ func BuildQueryEndpoints(homeDir, localDir, file string) (map[string]QueryConfig
 				if !exists {
 					return nil, fmt.Errorf("no RPC endpoints configured for chain %s in query %s", endpoint.Chain, query.ID)
 				}
-				contractReader, err := contractreader.NewReader(urls, 3) // 3 second timeout
+				contractReader, err := contractreader.NewReader(urls, perSourceTimeoutMs(query), maxSourceRetries(query))
 				if err != nil {
 					return nil, fmt.Errorf("failed to create contract reader for chain %s in query %s: %w", endpoint.Chain, query.ID, err)
 				}
@@ -336,7 +350,11 @@ func BuildQueryEndpoints(homeDir, localDir, file string) (map[string]QueryConfig
 				processedQuery = strings.ReplaceAll(processedQuery, placeholder, value)
 			}
 
-			rpcReader, err := rpcreader.NewReader(url, template.Method, processedQuery, processedHeaders, endpoint.ResponsePath, template.Timeout, endpoint.Params)
+			rpcTimeout := template.Timeout
+			if query.PerSourceTimeoutMs > 0 {
+				rpcTimeout = query.PerSourceTimeoutMs
+			}
+			rpcReader, err := rpcreader.NewReader(url, template.Method, processedQuery, processedHeaders, endpoint.ResponsePath, rpcTimeout, endpoint.Params, maxSourceRetries(query))
 			if err != nil {
 				return nil, fmt.Errorf("failed to create RPC reader for endpoint %s in query %s: %w", endpoint.EndpointType, query.ID, err)
 			}
@@ -353,14 +371,20 @@ func BuildQueryEndpoints(homeDir, localDir, file string) (map[string]QueryConfig
 			})
 		}
 		queryMap[query.ID] = QueryConfig{
-			ID:                query.ID,
-			AggregationMethod: query.AggregationMethod,
-			MaxSpreadPercent:  query.MaxSpreadPercent,
-			MinResponses:      query.MinResponses,
-			ResponseType:      query.ResponseType,
-			ContractReaders:   contractReaders,
-			RpcReaders:        rpcReaders,
-			CombinedReaders:   combinedReaders,
+			ID:                  query.ID,
+			QueryType:           query.QueryType,
+			AggregationMethod:   query.AggregationMethod,
+			MaxSpreadPercent:    query.MaxSpreadPercent,
+			MinResponses:        query.MinResponses,
+			ResponseType:        query.ResponseType,
+			FetchTimeoutMs:      query.FetchTimeoutMs,
+			PerSourceTimeoutMs:  query.PerSourceTimeoutMs,
+			MaxSourceRetries:    query.MaxSourceRetries,
+			PostFetchReserveMs:  query.PostFetchReserveMs,
+			AggregationBufferMs: query.AggregationBufferMs,
+			ContractReaders:     contractReaders,
+			RpcReaders:          rpcReaders,
+			CombinedReaders:     combinedReaders,
 		}
 	}
 

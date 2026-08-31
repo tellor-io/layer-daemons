@@ -12,6 +12,8 @@ import (
 	cmttypes "github.com/cometbft/cometbft/rpc/core/types"
 	globalfeetypes "github.com/strangelove-ventures/globalfee/x/globalfee/types"
 	"github.com/tellor-io/layer-daemons/lib/metrics"
+	"github.com/tellor-io/layer/utils"
+	oracletypes "github.com/tellor-io/layer/x/oracle/types"
 
 	"cosmossdk.io/math"
 
@@ -151,6 +153,88 @@ func newFactory(clientCtx client.Context) tx.Factory {
 		WithTxConfig(clientCtx.TxConfig)
 }
 
+type txWaitDebugInfo struct {
+	TxHash           string
+	QueryMetaId      uint64
+	QueryId          string
+	QueryType        string
+	QueryData        string
+	ReportValue      string
+	MarketPair       string
+	Reporter         string
+	ChainID          string
+	Bucket           string
+	BroadcastHeight  int64
+	TimeoutHeight    uint64
+	TimeoutTimestamp time.Time
+	GasEstimate      uint64
+}
+
+func (d txWaitDebugInfo) logFields() []interface{} {
+	fields := []interface{}{
+		"txHash", d.TxHash,
+		"queryMetaId", d.QueryMetaId,
+		"queryId", d.QueryId,
+		"queryType", d.QueryType,
+		"queryData", d.QueryData,
+		"reportValue", d.ReportValue,
+		"reporter", d.Reporter,
+		"chainId", d.ChainID,
+		"bucket", d.Bucket,
+		"broadcastHeight", d.BroadcastHeight,
+		"timeoutHeight", d.TimeoutHeight,
+		"timeoutTimestamp", d.TimeoutTimestamp.UTC().Format(time.RFC3339Nano),
+		"gasEstimate", d.GasEstimate,
+	}
+	if d.MarketPair != "" {
+		fields = append(fields, "marketPair", d.MarketPair)
+	}
+	return fields
+}
+
+func (c *Client) buildTxWaitDebugInfo(
+	queryMetaId uint64,
+	bucket string,
+	broadcastHeight int64,
+	timeoutHeight uint64,
+	timeoutTimestamp time.Time,
+	gasEstimate uint64,
+	txHash string,
+	msg sdk.Msg,
+) txWaitDebugInfo {
+	info := txWaitDebugInfo{
+		TxHash:           txHash,
+		QueryMetaId:      queryMetaId,
+		Bucket:           bucket,
+		ChainID:          c.chainID(),
+		Reporter:         c.accAddr.String(),
+		BroadcastHeight:  broadcastHeight,
+		TimeoutHeight:    timeoutHeight,
+		TimeoutTimestamp: timeoutTimestamp,
+		GasEstimate:      gasEstimate,
+	}
+	submit, ok := msg.(*oracletypes.MsgSubmitValue)
+	if !ok {
+		return info
+	}
+	info.QueryData = hex.EncodeToString(submit.QueryData)
+	info.ReportValue = submit.Value
+	info.QueryId = hex.EncodeToString(utils.QueryIDFromData(submit.QueryData))
+	info.QueryType = c.GetQueryType(submit.QueryData)
+	info.MarketPair = c.marketPairForQueryData(submit.QueryData)
+	return info
+}
+
+func (c *Client) marketPairForQueryData(queryData []byte) string {
+	queryDataHex := hex.EncodeToString(queryData)
+	for _, marketParam := range c.MarketParams {
+		if marketParam.QueryData == queryDataHex {
+			return marketParam.Pair
+		}
+	}
+	return ""
+}
+
 func handleBroadcastResult(resp *sdk.TxResponse, err error) error {
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
@@ -165,34 +249,81 @@ func handleBroadcastResult(resp *sdk.TxResponse, err error) error {
 	return nil
 }
 
-func (c *Client) WaitForTx(ctx context.Context, hash string) (*cmttypes.ResultTx, error) {
-	waiting := true
+func (c *Client) WaitForTx(ctx context.Context, hash string, debug *txWaitDebugInfo) (*cmttypes.ResultTx, error) {
 	bz, err := hex.DecodeString(hash)
 	if err != nil {
 		return nil, fmt.Errorf("unable to decode tx hash '%s'; err: %w", hash, err)
 	}
 
 	waitedBlockCount := 0
-	for waiting {
+	for {
 		resp, err := c.txByHash(ctx, bz)
 		if err != nil {
 			if strings.Contains(err.Error(), "not found") {
-				if waitedBlockCount == 2 {
-					return nil, fmt.Errorf("waited for next block and transaction is still not found")
+				if waitedBlockCount >= 2 {
+					latestHeight, heightErr := c.LatestBlockHeight(ctx)
+					fields := []interface{}{
+						"txHash", hash,
+						"waitedBlocks", waitedBlockCount,
+					}
+					if heightErr == nil {
+						fields = append(fields, "latestBlockHeight", latestHeight)
+					}
+					if debug != nil {
+						fields = append(fields, debug.logFields()...)
+					}
+					c.logger.Error("Transaction not found on chain after waiting for blocks", fields...)
+					if debug != nil {
+						if heightErr == nil {
+							return nil, fmt.Errorf(
+								"tx %s not found after waiting %d blocks (queryId=%s queryMetaId=%d queryType=%s broadcastHeight=%d latestBlockHeight=%d timeoutHeight=%d)",
+								hash, waitedBlockCount, debug.QueryId, debug.QueryMetaId, debug.QueryType,
+								debug.BroadcastHeight, latestHeight, debug.TimeoutHeight,
+							)
+						}
+						return nil, fmt.Errorf(
+							"tx %s not found after waiting %d blocks (queryId=%s queryMetaId=%d queryType=%s broadcastHeight=%d timeoutHeight=%d)",
+							hash, waitedBlockCount, debug.QueryId, debug.QueryMetaId, debug.QueryType,
+							debug.BroadcastHeight, debug.TimeoutHeight,
+						)
+					}
+					if heightErr == nil {
+						return nil, fmt.Errorf("tx %s not found after waiting %d blocks (latestBlockHeight=%d)", hash, waitedBlockCount, latestHeight)
+					}
+					return nil, fmt.Errorf("tx %s not found after waiting %d blocks", hash, waitedBlockCount)
 				}
-				err := c.WaitForNextBlock(ctx)
-				if err != nil {
+
+				fields := []interface{}{
+					"txHash", hash,
+					"waitedBlocks", waitedBlockCount,
+				}
+				if debug != nil {
+					fields = append(fields, debug.logFields()...)
+				}
+				c.logger.Warn("Transaction not found on chain, waiting for next block", fields...)
+
+				if err := c.WaitForNextBlock(ctx); err != nil {
+					if debug != nil {
+						c.logger.Error(
+							"Failed while waiting for next block after tx not found",
+							append([]interface{}{"txHash", hash, "error", err}, debug.logFields()...)...,
+						)
+					}
 					return nil, fmt.Errorf("waiting for next block: err: %w", err)
 				}
 				waitedBlockCount++
 				continue
 			}
+			if debug != nil {
+				c.logger.Error(
+					"Error fetching transaction by hash",
+					append([]interface{}{"txHash", hash, "error", err}, debug.logFields()...)...,
+				)
+			}
 			return nil, fmt.Errorf("fetching tx '%s'; err: %w", hash, err)
 		}
-		// Tx found
 		return resp, nil
 	}
-	return nil, fmt.Errorf("fetching tx '%s'; err: %w", hash, err)
 }
 
 func (c *Client) WaitForNextBlock(ctx context.Context) error {
@@ -318,8 +449,16 @@ func (c *Client) sendTx(ctx context.Context, queryMetaId uint64, isBridge bool, 
 		if attempt > 1 {
 			c.logger.Info("Retrying tx after out-of-gas", "attempt", attempt, "maxAttempts", maxAttempts, "bucket", bucket)
 		}
-		txnResponse, txHash, err := c.sendTxOnce(ctx, bucket, msg...)
+		txnResponse, txHash, err := c.sendTxOnce(ctx, queryMetaId, bucket, msg...)
 		if err != nil {
+			c.logger.Error(
+				"Transaction send failed",
+				"attempt", attempt,
+				"maxAttempts", maxAttempts,
+				"queryMetaId", queryMetaId,
+				"bucket", bucket,
+				"error", err,
+			)
 			return nil, err
 		}
 		lastResp = txnResponse
@@ -371,7 +510,7 @@ func (c *Client) maxAttemptsForTx(msg sdk.Msg) int {
 	return defaultMaxTxAttempts
 }
 
-func (c *Client) sendTxOnce(ctx context.Context, bucket string, msg ...sdk.Msg) (*cmttypes.ResultTx, string, error) {
+func (c *Client) sendTxOnce(ctx context.Context, queryMetaId uint64, bucket string, msg ...sdk.Msg) (*cmttypes.ResultTx, string, error) {
 	var block *cmtservice.GetLatestBlockResponse
 	if err := c.withGRPCFallback(ctx, "latest block lookup", func() error {
 		var err error
@@ -384,21 +523,26 @@ func (c *Client) sendTxOnce(ctx context.Context, bucket string, msg ...sdk.Msg) 
 	clientCtx := c.currentCosmosContext()
 	txf := newFactory(clientCtx)
 
+	broadcastHeight := block.SdkBlock.Header.Height
+	timeoutHeight := uint64(broadcastHeight) + c.txTimeoutHeightOffset
+	timeoutTimestamp := c.GetUniqueUnorderedTimeout()
+
 	// Configure for unordered transactions (Cosmos SDK 0.53.4+)
 	// Set sequence to 0, enable unordered mode, and set unique timeout timestamp
 	// https://docs.cosmos.network/v0.53/build/architecture/adr-070-unordered-account
 	txf = txf.WithSequence(0).
 		WithGasPrices(c.minGasFee).
-		WithTimeoutHeight(uint64(block.SdkBlock.Header.Height + 2)).
+		WithTimeoutHeight(timeoutHeight).
 		WithUnordered(true).
-		WithTimeoutTimestamp(c.GetUniqueUnorderedTimeout())
+		WithTimeoutTimestamp(timeoutTimestamp)
 	var err error
 	txf, err = txf.Prepare(clientCtx)
 	if err != nil {
 		c.grpcMu.RUnlock()
 		return nil, "", fmt.Errorf("error preparing transaction factory: %w", err)
 	}
-	gasEstimate, err := c.EstimateGas(ctx, clientCtx, txf, bucket, msg...)
+	var gasEstimate uint64
+	gasEstimate, err = c.EstimateGas(ctx, clientCtx, txf, bucket, msg...)
 	if err == nil {
 		txf = txf.WithGas(gasEstimate)
 	}
@@ -419,10 +563,25 @@ func (c *Client) sendTxOnce(ctx context.Context, bucket string, msg ...sdk.Msg) 
 	}
 	res, err := c.broadcastTxWithFallback(ctx, txBytes)
 	if err := handleBroadcastResult(res, err); err != nil {
+		debug := c.buildTxWaitDebugInfo(
+			queryMetaId, bucket, broadcastHeight, timeoutHeight, timeoutTimestamp, gasEstimate, "", msg[0],
+		)
+		c.logger.Error(
+			"Transaction broadcast rejected",
+			append([]interface{}{"error", err}, debug.logFields()...)...,
+		)
 		return nil, "", fmt.Errorf("error broadcasting transaction result: %w", err)
 	}
 
-	txnResponse, err := c.WaitForTx(ctx, res.TxHash)
+	debugInfo := c.buildTxWaitDebugInfo(
+		queryMetaId, bucket, broadcastHeight, timeoutHeight, timeoutTimestamp, gasEstimate, res.TxHash, msg[0],
+	)
+	c.logger.Info(
+		"Transaction broadcast accepted, waiting for inclusion",
+		debugInfo.logFields()...,
+	)
+
+	txnResponse, err := c.WaitForTx(ctx, res.TxHash, &debugInfo)
 	if err != nil {
 		return nil, "", fmt.Errorf("error waiting for transaction: %w", err)
 	}

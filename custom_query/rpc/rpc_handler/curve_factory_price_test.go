@@ -64,7 +64,7 @@ func TestCurveFactoryPriceHandler_medianAndExclusions(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	rdr, err := reader.NewReader(srv.URL, http.MethodGet, "", nil, nil, 5000, susdeCurveFactoryParams())
+	rdr, err := reader.NewReader(srv.URL, http.MethodGet, "", nil, nil, 5000, susdeCurveFactoryParams(), 1)
 	require.NoError(t, err)
 
 	var h CurveFactoryPriceHandler
@@ -93,7 +93,7 @@ func TestCurveFactoryPriceHandler_v1Fallback(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	rdr, err := reader.NewReader(srv.URL, http.MethodGet, "", nil, nil, 5000, susdeCurveFactoryParams())
+	rdr, err := reader.NewReader(srv.URL, http.MethodGet, "", nil, nil, 5000, susdeCurveFactoryParams(), 1)
 	require.NoError(t, err)
 
 	var h CurveFactoryPriceHandler
@@ -114,7 +114,7 @@ func TestCurveFactoryPriceHandler_errors(t *testing.T) {
 			_, _ = w.Write([]byte(`{"success":false,"data":{"poolData":[]}}`))
 		}))
 		t.Cleanup(srv.Close)
-		rdr, err := reader.NewReader(srv.URL, http.MethodGet, "", nil, nil, 5000, susdeCurveFactoryParams())
+		rdr, err := reader.NewReader(srv.URL, http.MethodGet, "", nil, nil, 5000, susdeCurveFactoryParams(), 1)
 		require.NoError(t, err)
 		var h CurveFactoryPriceHandler
 		_, err = h.FetchValue(context.Background(), rdr, false, 0, &pricefeedservertypes.MarketToExchangePrices{}, 0)
@@ -130,7 +130,7 @@ func TestCurveFactoryPriceHandler_errors(t *testing.T) {
 			_, _ = w.Write([]byte(`{"success":true,"data":{"poolData":[]}}`))
 		}))
 		t.Cleanup(srv.Close)
-		rdr, err := reader.NewReader(srv.URL, http.MethodGet, "", nil, nil, 5000, susdeCurveFactoryParams())
+		rdr, err := reader.NewReader(srv.URL, http.MethodGet, "", nil, nil, 5000, susdeCurveFactoryParams(), 1)
 		require.NoError(t, err)
 		var h CurveFactoryPriceHandler
 		_, err = h.FetchValue(context.Background(), rdr, false, 0, &pricefeedservertypes.MarketToExchangePrices{}, 0)
@@ -143,7 +143,7 @@ func TestCurveFactoryPriceHandler_missingTargetToken(t *testing.T) {
 		_, _ = w.Write([]byte(`{"success":true,"data":{"poolData":[]}}`))
 	}))
 	t.Cleanup(srv.Close)
-	rdr, err := reader.NewReader(srv.URL, http.MethodGet, "", nil, nil, 5000, map[string]string{})
+	rdr, err := reader.NewReader(srv.URL, http.MethodGet, "", nil, nil, 5000, map[string]string{}, 1)
 	require.NoError(t, err)
 	var h CurveFactoryPriceHandler
 	_, err = h.FetchValue(context.Background(), rdr, false, 0, &pricefeedservertypes.MarketToExchangePrices{}, 0)
@@ -163,7 +163,7 @@ func TestCurveFactoryPriceHandler_dataAgeTooOld(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	rdr, err := reader.NewReader(srv.URL, http.MethodGet, "", nil, nil, 5000, susdeCurveFactoryParams())
+	rdr, err := reader.NewReader(srv.URL, http.MethodGet, "", nil, nil, 5000, susdeCurveFactoryParams(), 1)
 	require.NoError(t, err)
 
 	var h CurveFactoryPriceHandler
@@ -186,7 +186,7 @@ func TestCurveFactoryPriceHandler_dataAgeDisabled(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	rdr, err := reader.NewReader(srv.URL, http.MethodGet, "", nil, nil, 5000, susdeCurveFactoryParams())
+	rdr, err := reader.NewReader(srv.URL, http.MethodGet, "", nil, nil, 5000, susdeCurveFactoryParams(), 1)
 	require.NoError(t, err)
 
 	var h CurveFactoryPriceHandler

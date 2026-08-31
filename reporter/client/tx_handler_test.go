@@ -1,11 +1,14 @@
 package client
 
 import (
+	"encoding/hex"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/stretchr/testify/require"
+	pricefeedtypes "github.com/tellor-io/layer-daemons/pricefeed/client/types"
 	oracletypes "github.com/tellor-io/layer/x/oracle/types"
 
 	"cosmossdk.io/log"
@@ -128,4 +131,58 @@ func mustEncodeQueryData(t *testing.T, queryType string) []byte {
 	bz, err := args.Pack(queryType, []byte("args"))
 	require.NoError(t, err)
 	return bz
+}
+
+func TestBuildTxWaitDebugInfo_SubmitValue(t *testing.T) {
+	c := NewClient(log.NewNopLogger(), "0.001loya")
+	queryData := mustEncodeQueryData(t, "SpotPrice")
+	queryDataHex := hex.EncodeToString(queryData)
+	msg := &oracletypes.MsgSubmitValue{
+		Creator:   "tellor1abc",
+		QueryData: queryData,
+		Value:     "0xdeadbeef",
+	}
+	c.MarketParams = []pricefeedtypes.MarketParam{
+		{Pair: "eth-usd", QueryData: queryDataHex},
+	}
+
+	timeout := time.Now().UTC()
+	info := c.buildTxWaitDebugInfo(42, spotPriceGasBucketKey, 100, 102, timeout, 250000, "ABC123", msg)
+
+	require.Equal(t, "ABC123", info.TxHash)
+	require.Equal(t, uint64(42), info.QueryMetaId)
+	require.Equal(t, queryDataHex, info.QueryData)
+	require.Equal(t, "0xdeadbeef", info.ReportValue)
+	require.Equal(t, "SpotPrice", info.QueryType)
+	require.Equal(t, "eth-usd", info.MarketPair)
+	require.Equal(t, spotPriceGasBucketKey, info.Bucket)
+	require.Equal(t, int64(100), info.BroadcastHeight)
+	require.Equal(t, uint64(102), info.TimeoutHeight)
+	require.Equal(t, uint64(250000), info.GasEstimate)
+	require.NotEmpty(t, info.QueryId)
+}
+
+func TestClientTxTimeoutDefaults(t *testing.T) {
+	c := NewClient(log.NewNopLogger(), "0.001loya")
+	require.Equal(t, defaultTxBroadcastTimeout, c.txBroadcastTimeout)
+	require.Equal(t, defaultUnorderedTxTimeout, c.unorderedTxTimeout)
+	require.Equal(t, defaultTxTimeoutHeightOffset, c.txTimeoutHeightOffset)
+}
+
+func TestGetUniqueUnorderedTimeout_UsesConfiguredTTL(t *testing.T) {
+	c := NewClient(log.NewNopLogger(), "0.001loya")
+	c.unorderedTxTimeout = 75 * time.Second
+
+	before := time.Now()
+	got := c.GetUniqueUnorderedTimeout()
+	require.True(t, got.After(before.Add(74*time.Second)))
+	require.True(t, got.Before(before.Add(76*time.Second)))
+}
+
+func TestBuildTxWaitDebugInfo_NonSubmitValue(t *testing.T) {
+	c := NewClient(log.NewNopLogger(), "0.001loya")
+	info := c.buildTxWaitDebugInfo(0, "other", 1, 3, time.Now(), 0, "HASH", nil)
+	require.Equal(t, "HASH", info.TxHash)
+	require.Empty(t, info.QueryData)
+	require.Empty(t, info.ReportValue)
 }

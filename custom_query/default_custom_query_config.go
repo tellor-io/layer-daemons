@@ -20,6 +20,21 @@ type CombinedConfig struct {
 
 const (
 	defaultCustomQueryTomlTemplate = `# This is a TOML config file.
+
+[defaults.spot_price]
+fetch_timeout_ms = 1500
+per_source_timeout_ms = 700
+max_source_retries = 1
+post_fetch_reserve_ms = 2000
+aggregation_buffer_ms = 100
+
+[defaults.bridge_deposit]
+fetch_timeout_ms = 15000
+per_source_timeout_ms = 5000
+max_source_retries = 3
+post_fetch_reserve_ms = 10000
+aggregation_buffer_ms = 100
+
 [endpoints]
 {{- range $key, $endpoint := .Endpoints }}
     [endpoints.{{ $key }}]

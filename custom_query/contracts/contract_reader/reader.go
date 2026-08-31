@@ -35,9 +35,13 @@ type ethClient struct {
 	mu      sync.RWMutex
 }
 
-func NewReader(urls []string, timeout int) (*Reader, error) {
+func NewReader(urls []string, timeoutMs int, maxRetries int) (*Reader, error) {
 	if len(urls) == 0 {
 		return nil, fmt.Errorf("no RPC endpoints provided")
+	}
+
+	if maxRetries <= 0 {
+		maxRetries = 1
 	}
 
 	clients := make([]*ethClient, 0, len(urls))
@@ -62,11 +66,15 @@ func NewReader(urls []string, timeout int) (*Reader, error) {
 		return nil, fmt.Errorf("failed to connect to any RPC endpoint")
 	}
 
+	if timeoutMs <= 0 {
+		timeoutMs = 700
+	}
+
 	reader := &Reader{
 		clients:    clients,
-		timeout:    time.Duration(timeout) * time.Second,
-		maxRetries: 3,
-		retryDelay: 100 * time.Millisecond,
+		timeout:    time.Duration(timeoutMs) * time.Millisecond,
+		maxRetries: maxRetries,
+		retryDelay: 75 * time.Millisecond,
 	}
 
 	return reader, nil
@@ -95,8 +103,12 @@ func (r *Reader) ReadContract(ctx context.Context, address, functionSig string, 
 	var lastErr error
 	for _, client := range r.getHealthyClients() {
 		for retry := 0; retry <= r.maxRetries; retry++ {
-			ctx, cancel := context.WithTimeout(ctx, r.timeout)
-			result, err := client.client.CallContract(ctx, callMsg, nil)
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+
+			ctxWithTimeout, cancel := context.WithTimeout(ctx, r.timeout)
+			result, err := client.client.CallContract(ctxWithTimeout, callMsg, nil)
 			cancel()
 
 			if err == nil {
@@ -114,7 +126,12 @@ func (r *Reader) ReadContract(ctx context.Context, address, functionSig string, 
 			log.Warnf("Contract call failed (attempt %d/%d): %v", retry+1, r.maxRetries+1, err)
 
 			if retry < r.maxRetries {
-				time.Sleep(r.retryDelay * time.Duration(retry+1))
+				delay := r.retryDelay * time.Duration(retry+1)
+				select {
+				case <-time.After(delay):
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				}
 			}
 		}
 

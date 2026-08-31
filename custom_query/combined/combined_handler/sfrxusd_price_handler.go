@@ -67,7 +67,7 @@ func (h *SFRXUSDPriceHandler) FetchValue(
 		log.Warn("[sFRXUSD] CoinPaprika reader not available")
 	}
 
-	fetcher.Wait()
+	fetcher.WaitWithContext(ctx)
 
 	if err := checkDataAge(fetchedAt, maxDataAge); err != nil {
 		return 0, fmt.Errorf("sfrxusd: %w", err)

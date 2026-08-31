@@ -16,7 +16,7 @@ func TestNewReader(t *testing.T) {
 	headers := map[string]string{"X-API-Key": "test"}
 	responsePath := []string{"data", "value"}
 
-	reader, err := NewReader(url, "GET", "", headers, responsePath, 5, nil)
+	reader, err := NewReader(url, "GET", "", headers, responsePath, 5, nil, 1)
 	if err != nil {
 		t.Fatalf("Failed to create reader: %v", err)
 	}
@@ -58,7 +58,7 @@ func TestFetchJSON(t *testing.T) {
 
 	// Create reader with test server URL
 	headers := map[string]string{"X-Test-Header": "test-value"}
-	reader, err := NewReader(server.URL, "GET", "", headers, []string{"pool", "current_sqrt_price"}, 5, nil)
+	reader, err := NewReader(server.URL, "GET", "", headers, []string{"pool", "current_sqrt_price"}, 5, nil, 1)
 	if err != nil {
 		t.Fatalf("Failed to create reader: %v", err)
 	}
@@ -87,7 +87,7 @@ func TestFetchJSON(t *testing.T) {
 }
 
 func TestExtractValueFromJSON(t *testing.T) {
-	reader, _ := NewReader("http://example.com", "GET", "", nil, nil, 5, nil)
+	reader, _ := NewReader("http://example.com", "GET", "", nil, nil, 5, nil, 1)
 
 	testCases := []struct {
 		name     string
@@ -135,7 +135,7 @@ func TestRetryLogic(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		failCount++
 		if failCount <= 2 {
-			w.WriteHeader(http.StatusInternalServerError)
+			w.WriteHeader(http.StatusServiceUnavailable)
 			return
 		}
 		require.NoError(t, json.NewEncoder(w).Encode(map[string]string{"status": "ok"}))
@@ -143,7 +143,7 @@ func TestRetryLogic(t *testing.T) {
 	defer server.Close()
 
 	// Create reader
-	reader, err := NewReader(server.URL, "GET", "", nil, nil, 5, nil)
+	reader, err := NewReader(server.URL, "GET", "", nil, nil, 5, nil, 2)
 	if err != nil {
 		t.Fatalf("Failed to create reader: %v", err)
 	}
@@ -175,7 +175,7 @@ func TestTimeout(t *testing.T) {
 	defer server.Close()
 
 	// Create reader with 1 second timeout
-	reader, err := NewReader(server.URL, "GET", "", nil, nil, 1, nil)
+	reader, err := NewReader(server.URL, "GET", "", nil, nil, 1, nil, 1)
 	if err != nil {
 		t.Fatalf("Failed to create reader: %v", err)
 	}

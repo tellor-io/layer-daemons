@@ -34,7 +34,7 @@ func countingServer(t *testing.T, body string) (*httptest.Server, *int32) {
 // timeout arg as seconds for the client and ms for the per-attempt context).
 func newTestReader(t *testing.T, url string) *Reader {
 	t.Helper()
-	r, err := NewReader(url, http.MethodGet, "", nil, nil, 5000, nil)
+	r, err := NewReader(url, http.MethodGet, "", nil, nil, 5000, nil, 1)
 	if err != nil {
 		t.Fatalf("NewReader: %v", err)
 	}
@@ -121,7 +121,7 @@ func TestFetchJSON_CoalescesConcurrentRequests(t *testing.T) {
 
 func TestCacheKey_DistinctByURLQueryAndHeaders(t *testing.T) {
 	mk := func(url, query string, headers map[string]string) string {
-		r, err := NewReader(url, http.MethodGet, query, headers, nil, 5000, nil)
+		r, err := NewReader(url, http.MethodGet, query, headers, nil, 5000, nil, 1)
 		if err != nil {
 			t.Fatalf("NewReader: %v", err)
 		}

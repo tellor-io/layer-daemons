@@ -3,9 +3,11 @@ package rpc_reader
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -32,14 +34,22 @@ type httpClient struct {
 	method  string
 }
 
-func NewReader(url, method, query string, headers map[string]string, responsePath []string, timeout int, params map[string]string) (*Reader, error) {
+func NewReader(url, method, query string, headers map[string]string, responsePath []string, timeoutMs int, params map[string]string, maxRetries int) (*Reader, error) {
 	if url == "" {
 		return nil, fmt.Errorf("no RPC endpoint provided")
 	}
 
+	if timeoutMs <= 0 {
+		timeoutMs = 1500
+	}
+	if maxRetries <= 0 {
+		maxRetries = 1
+	}
+
+	attemptTimeout := time.Duration(timeoutMs) * time.Millisecond
 	client := &httpClient{
 		client: &http.Client{
-			Timeout: time.Duration(timeout) * time.Second,
+			Timeout: attemptTimeout,
 		},
 		baseURL: url,
 		method:  method,
@@ -47,9 +57,9 @@ func NewReader(url, method, query string, headers map[string]string, responsePat
 
 	reader := &Reader{
 		client:       client,
-		timeout:      time.Duration(timeout) * time.Millisecond,
-		maxRetries:   3,
-		retryDelay:   100 * time.Millisecond,
+		timeout:      attemptTimeout,
+		maxRetries:   maxRetries,
+		retryDelay:   75 * time.Millisecond,
 		Headers:      headers,
 		ResponsePath: responsePath,
 		Query:        query,
@@ -103,6 +113,10 @@ func (r *Reader) fetchWithRetry(ctx context.Context) ([]byte, error) {
 
 		lastErr = err
 		log.Warnf("Request failed (attempt %d/%d): %v", retry+1, r.maxRetries+1, err)
+
+		if retry >= r.maxRetries || !isTransientRPCError(err) || !hasRetryBudget(ctx) {
+			break
+		}
 	}
 
 	metrics.RPCCallErrors.Inc()
@@ -144,6 +158,34 @@ func (r *Reader) attemptFetch(ctx context.Context, method string) ([]byte, error
 	}
 
 	return body, nil
+}
+
+func isTransientRPCError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return true
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "connection reset") ||
+		strings.Contains(msg, "429") ||
+		strings.Contains(msg, "502") ||
+		strings.Contains(msg, "503") ||
+		strings.Contains(msg, "504") ||
+		strings.Contains(msg, "timeout")
+}
+
+func hasRetryBudget(ctx context.Context) bool {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return true
+	}
+	return time.Until(deadline) >= 400*time.Millisecond
 }
 
 func (r *Reader) ExtractValueFromJSON(data []byte, path []string) (any, error) {

@@ -4,26 +4,26 @@ var StaticEndpointTemplateConfig = map[string]*EndpointTemplate{
 	"coingecko": {
 		URLTemplate:    "https://api.coingecko.com/api/v3/simple/price?ids={coin_id}&vs_currencies=usd",
 		Method:         "GET",
-		Timeout:        5000,
+		Timeout:        1500,
 		MaxDataAgeSecs: 600, // 10 minutes
 	},
 	"coingeckoPro": {
 		URLTemplate:    "https://pro-api.coingecko.com/api/v3/simple/price?ids={coin_id}&vs_currencies=usd&x_cg_pro_api_key={api_key}",
 		Method:         "GET",
-		Timeout:        5000,
+		Timeout:        1500,
 		ApiKey:         "${CGPRO_API_KEY}",
 		MaxDataAgeSecs: 600, // 10 minutes
 	},
 	"coinpaprika": {
 		URLTemplate:    "https://api.coinpaprika.com/v1/tickers/{coin_id}?quotes=USD",
 		Method:         "GET",
-		Timeout:        5000,
+		Timeout:        1500,
 		MaxDataAgeSecs: 600, // 10 minutes
 	},
 	"curve": {
 		URLTemplate:    "https://prices.curve.finance/v1/usd_price/ethereum/{contract_address}",
 		Method:         "GET",
-		Timeout:        5000,
+		Timeout:        1500,
 		MaxDataAgeSecs: 600, // 10 minutes
 	},
 	// curveSusdeFactoryStableNg: fixed getPools URL for factory-stable-ng (legacy name). Use with curve_factory_price
@@ -31,26 +31,26 @@ var StaticEndpointTemplateConfig = map[string]*EndpointTemplate{
 	"curveSusdeFactoryStableNg": {
 		URLTemplate:    "https://api.curve.fi/api/getPools/ethereum/factory-stable-ng",
 		Method:         "GET",
-		Timeout:        5000,
+		Timeout:        1500,
 		MaxDataAgeSecs: 600, // 10 minutes
 	},
 	// curveEthereumGetPools: Curve getPools for ethereum/{registry}. Params: registry (URL), plus handler params on Reader.
 	"curveEthereumGetPools": {
 		URLTemplate:    "https://api.curve.fi/api/getPools/ethereum/{registry}",
 		Method:         "GET",
-		Timeout:        5000,
+		Timeout:        1500,
 		MaxDataAgeSecs: 600, // 10 minutes
 	},
 	"crypto": {
 		URLTemplate:    "https://api.crypto.com/v2/public/get-ticker?instrument_name={instrument_name}",
 		Method:         "GET",
-		Timeout:        5000,
+		Timeout:        1500,
 		MaxDataAgeSecs: 600, // 10 minutes
 	},
 	"coinmarketcap": {
 		URLTemplate: "https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest?id={id}",
 		Method:      "GET",
-		Timeout:     5000,
+		Timeout:     1500,
 		ApiKey:      "${CMC_PRO_API_KEY}",
 		Headers: map[string]string{
 			"Accept":            "application/json",
@@ -61,13 +61,13 @@ var StaticEndpointTemplateConfig = map[string]*EndpointTemplate{
 	"coinbase": {
 		URLTemplate:    "https://api.coinbase.com/v2/prices/{currency_pair}/spot",
 		Method:         "GET",
-		Timeout:        5000,
+		Timeout:        1500,
 		MaxDataAgeSecs: 600, // 10 minutes
 	},
 	"osmosis": {
 		URLTemplate:    "https://lcd.osmosis.zone/osmosis/gamm/v1beta1/pools/{pool_id}",
 		Method:         "GET",
-		Timeout:        5000,
+		Timeout:        1500,
 		MaxDataAgeSecs: 86400, // 24 hours — uses native last_liquidity_update timestamp
 	},
 	"uniswapV4ethereum": {
@@ -75,7 +75,7 @@ var StaticEndpointTemplateConfig = map[string]*EndpointTemplate{
 		URLTemplate:    "https://gateway.thegraph.com/api/{api_key}/subgraphs/id/DiYPVdygkfjDWhbxGSqAQxwBKmfKnkWQojqeM2rkLb3G",
 		Query:          `{"query": "{ token(id: \"{token_address}\") { derivedETH } }"}`,
 		Method:         "POST",
-		Timeout:        5000,
+		Timeout:        1500,
 		Headers:        map[string]string{"Content-Type": "application/json"},
 		ApiKey:         "${SUBGRAPH_API_KEY}",
 		MaxDataAgeSecs: 600, // 10 minutes — indexed data can lag behind chain head
@@ -86,7 +86,7 @@ var StaticEndpointTemplateConfig = map[string]*EndpointTemplate{
 		URLTemplate:    "https://gateway.thegraph.com/api/{api_key}/subgraphs/id/{subgraph_id}",
 		Query:          `{"query": "{ pool(id: \"{pool_id}\") { token0 { id } token1 { id } token0Price token1Price } _meta { block { timestamp } } }"}`,
 		Method:         "POST",
-		Timeout:        5000,
+		Timeout:        1500,
 		Headers:        map[string]string{"Content-Type": "application/json"},
 		ApiKey:         "${SUBGRAPH_API_KEY}",
 		MaxDataAgeSecs: 600, // 10 minutes — uses native _meta.block.timestamp
@@ -96,7 +96,7 @@ var StaticEndpointTemplateConfig = map[string]*EndpointTemplate{
 		URLTemplate:    "https://gateway.thegraph.com/api/{api_key}/subgraphs/id/5zvR82QoaXYFyDEKLZ9t6v9adgnptxYpKpSbxtgVENFV",
 		Query:          `{"query": "{ token(id: \"{token_address}\") { derivedETH } }"}`,
 		Method:         "POST",
-		Timeout:        5000,
+		Timeout:        1500,
 		Headers:        map[string]string{"Content-Type": "application/json"},
 		ApiKey:         "${SUBGRAPH_API_KEY}",
 		MaxDataAgeSecs: 600, // 10 minutes — indexed data can lag behind chain head
@@ -105,7 +105,7 @@ var StaticEndpointTemplateConfig = map[string]*EndpointTemplate{
 		// docs: https://docs.sushi.com/api/examples/pricing
 		URLTemplate:    "https://api.sushi.com/price/v1/747474",
 		Method:         "GET",
-		Timeout:        5000,
+		Timeout:        1500,
 		MaxDataAgeSecs: 600, // 10 minutes
 	},
 }

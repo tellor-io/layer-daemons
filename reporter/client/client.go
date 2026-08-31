@@ -43,6 +43,10 @@ const (
 	defaultGas                   = uint64(240000)
 	primaryEndpointCheckInterval = 5 * time.Minute
 	primaryEndpointProbeTimeout  = 10 * time.Second
+
+	defaultTxBroadcastTimeout  = 15 * time.Second
+	defaultUnorderedTxTimeout  = 30 * time.Second
+	defaultTxTimeoutHeightOffset = uint64(2)
 )
 
 var ErrKeyringPasswordFile = errors.New("keyring password file validation failed")
@@ -180,7 +184,10 @@ type Client struct {
 	PriceGuard *PriceGuard
 	// Gas estimate refresh interval; <=0 disables periodic refresh.
 	refreshGasEstimatesInterval time.Duration
-	gasEstimator                *gasEstimateState
+	txBroadcastTimeout            time.Duration
+	unorderedTxTimeout            time.Duration
+	txTimeoutHeightOffset         uint64
+	gasEstimator                  *gasEstimateState
 
 	// Resources that need cleanup
 	grpcMu           sync.RWMutex
@@ -197,22 +204,24 @@ type Client struct {
 }
 
 // GetUniqueUnorderedTimeout generates a unique timeout timestamp for unordered transactions.
-// Returns current time + 30 seconds + atomic nanosecond increment for uniqueness.
+// Returns current time + unorderedTxTimeout + atomic nanosecond increment for uniqueness.
 // https://docs.cosmos.network/v0.53/build/architecture/adr-070-unordered-account
 func (c *Client) GetUniqueUnorderedTimeout() time.Time {
-	// Atomically increment nonce and add to base timeout (30 seconds from now)
 	nonce := atomic.AddUint64(&txTimeoutNonce, 1)
-	return time.Now().Add(30 * time.Second).Add(time.Duration(nonce) * time.Nanosecond)
+	return time.Now().Add(c.unorderedTxTimeout).Add(time.Duration(nonce) * time.Nanosecond)
 }
 
 func NewClient(logger log.Logger, valGasMin string) *Client {
 	logger = logger.With("module", "reporter-client")
 	txChan := make(chan TxChannelInfo)
 	return &Client{
-		cosmosCtx: client.Context{},
-		logger:    logger,
-		minGasFee: valGasMin,
-		txChan:    txChan,
+		cosmosCtx:             client.Context{},
+		logger:                logger,
+		minGasFee:             valGasMin,
+		txChan:                txChan,
+		txBroadcastTimeout:    defaultTxBroadcastTimeout,
+		unorderedTxTimeout:    defaultUnorderedTxTimeout,
+		txTimeoutHeightOffset: defaultTxTimeoutHeightOffset,
 		gasEstimator: newGasEstimateState(map[string]gasBucketConfig{
 			bridgeGasBucketKey: {
 				levels:  []float64{1.75, 2.0},
@@ -307,6 +316,19 @@ func (c *Client) Start(
 	autoUnbondingMaxStakePercentage := viper.GetString("auto-unbonding-max-stake-percentage")
 	c.refreshGasEstimatesInterval = viper.GetDuration("refresh-gas-estimates-interval")
 
+	c.txBroadcastTimeout = viper.GetDuration("tx-broadcast-timeout")
+	if c.txBroadcastTimeout <= 0 {
+		return fmt.Errorf("tx-broadcast-timeout must be greater than 0, got: %s", c.txBroadcastTimeout)
+	}
+	c.unorderedTxTimeout = viper.GetDuration("unordered-tx-timeout")
+	if c.unorderedTxTimeout <= 0 {
+		return fmt.Errorf("unordered-tx-timeout must be greater than 0, got: %s", c.unorderedTxTimeout)
+	}
+	c.txTimeoutHeightOffset = viper.GetUint64("tx-timeout-height-offset")
+	if c.txTimeoutHeightOffset == 0 {
+		return fmt.Errorf("tx-timeout-height-offset must be greater than 0, got: %d", c.txTimeoutHeightOffset)
+	}
+
 	if autoUnbondingFrequency > 0 {
 		if autoUnbondingFrequency > 21 {
 			return fmt.Errorf("auto-unbonding-frequency must be between 1 and 21 days when set, got: %d", autoUnbondingFrequency)
@@ -368,6 +390,13 @@ func (c *Client) Start(
 	} else {
 		c.logger.Info("Auto balance-to-keep disabled")
 	}
+
+	c.logger.Info(
+		"Transaction timeout configuration",
+		"tx_broadcast_timeout", c.txBroadcastTimeout.String(),
+		"unordered_tx_timeout", c.unorderedTxTimeout.String(),
+		"tx_timeout_height_offset", c.txTimeoutHeightOffset,
+	)
 
 	if c.refreshGasEstimatesInterval > 0 {
 		c.logger.Info("Periodic gas estimate refresh enabled", "interval", c.refreshGasEstimatesInterval.String())
