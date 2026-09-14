@@ -293,14 +293,18 @@ func (c *Client) WaitForTx(ctx context.Context, hash string, debug *txWaitDebugI
 					return nil, fmt.Errorf("tx %s not found after waiting %d blocks", hash, waitedBlockCount)
 				}
 
-				fields := []interface{}{
-					"txHash", hash,
-					"waitedBlocks", waitedBlockCount,
+				// Skip warn on the first lookup: broadcast only means mempool
+				// acceptance, so "not found" before any block wait is expected.
+				if waitedBlockCount >= 1 {
+					fields := []interface{}{
+						"txHash", hash,
+						"waitedBlocks", waitedBlockCount,
+					}
+					if debug != nil {
+						fields = append(fields, debug.logFields()...)
+					}
+					c.logger.Warn("Transaction not found on chain, waiting for next block", fields...)
 				}
-				if debug != nil {
-					fields = append(fields, debug.logFields()...)
-				}
-				c.logger.Warn("Transaction not found on chain, waiting for next block", fields...)
 
 				if err := c.WaitForNextBlock(ctx); err != nil {
 					if debug != nil {
