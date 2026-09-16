@@ -18,10 +18,10 @@ func TestGasEstimatorEscalation_NonBridge(t *testing.T) {
 	c := NewClient(log.NewNopLogger(), "0.001loya")
 	bucket := "test-non-bridge"
 
-	require.Equal(t, 1.25, c.gasEstimator.currentGasAdjustment(bucket))
+	require.Equal(t, 1.30, c.gasEstimator.currentGasAdjustment(bucket))
 	changed, from, to := c.gasEstimator.escalateGasLevel(bucket)
 	require.True(t, changed)
-	require.Equal(t, 1.25, from)
+	require.Equal(t, 1.30, from)
 	require.Equal(t, 1.6, to)
 	require.Equal(t, 1.6, c.gasEstimator.currentGasAdjustment(bucket))
 
@@ -56,12 +56,12 @@ func TestEscalationAffectsOnlyRelevantBucket(t *testing.T) {
 	c := NewClient(log.NewNopLogger(), "0.001loya")
 
 	otherBucket := "*oracletypes.MsgWithdrawTip"
-	require.Equal(t, 1.25, c.gasEstimator.currentGasAdjustment(otherBucket))
+	require.Equal(t, 1.30, c.gasEstimator.currentGasAdjustment(otherBucket))
 
 	changed, _, _ := c.gasEstimator.escalateGasLevel(spotPriceGasBucketKey)
 	require.True(t, changed)
 	require.Equal(t, 1.6, c.gasEstimator.currentGasAdjustment(spotPriceGasBucketKey))
-	require.Equal(t, 1.25, c.gasEstimator.currentGasAdjustment(otherBucket))
+	require.Equal(t, 1.30, c.gasEstimator.currentGasAdjustment(otherBucket))
 }
 
 func TestRetryPolicyMatrix(t *testing.T) {
@@ -95,7 +95,7 @@ func TestResetAllGasLevelsToBase_IsLazy(t *testing.T) {
 	require.Equal(t, uint64(111), estimate)
 
 	c.resetAllGasLevelsToBase()
-	require.Equal(t, 1.25, c.gasEstimator.currentGasAdjustment(bucket))
+	require.Equal(t, 1.30, c.gasEstimator.currentGasAdjustment(bucket))
 	_, ok = c.gasEstimator.getCachedEstimate(bucket)
 	require.False(t, ok)
 }

@@ -31,6 +31,9 @@ const (
 	defaultNonBridgeBucketConfigKey = "default-non-bridge"
 	outOfGasCode                    = uint32(11)
 	defaultMaxTxAttempts            = 3
+	// Brief pause before a final /tx lookup at timeout height. Status can
+	// advance to the inclusion height slightly before the tx indexer serves it.
+	txIndexRetryDelay = 150 * time.Millisecond
 )
 
 type gasBucketConfig struct {
@@ -146,7 +149,7 @@ func newFactory(clientCtx client.Context) tx.Factory {
 	return tx.Factory{}.
 		WithChainID(clientCtx.ChainID).
 		WithKeybase(clientCtx.Keyring).
-		WithGasAdjustment(1.25).
+		WithGasAdjustment(1.30).
 		WithGas(defaultGas).
 		WithSignMode(signing.SignMode_SIGN_MODE_DIRECT).
 		WithAccountRetriever(clientCtx.AccountRetriever).
@@ -262,6 +265,25 @@ func (c *Client) WaitForTx(ctx context.Context, hash string, debug *txWaitDebugI
 			if strings.Contains(err.Error(), "not found") {
 				if waitedBlockCount >= 2 {
 					latestHeight, heightErr := c.LatestBlockHeight(ctx)
+					// Inclusion often lands exactly at timeoutHeight. Status can
+					// report that tip before /tx can serve the hash; retry once.
+					if heightErr == nil && debug != nil && uint64(latestHeight) == debug.TimeoutHeight {
+						select {
+						case <-ctx.Done():
+							return nil, fmt.Errorf("waiting to re-query tx at timeout height: %w", ctx.Err())
+						case <-time.After(txIndexRetryDelay):
+						}
+						if retryResp, retryErr := c.txByHash(ctx, bz); retryErr == nil {
+							return retryResp, nil
+						} else if !strings.Contains(retryErr.Error(), "not found") {
+							c.logger.Error(
+								"Error fetching transaction by hash",
+								append([]interface{}{"txHash", hash, "error", retryErr}, debug.logFields()...)...,
+							)
+							return nil, fmt.Errorf("fetching tx '%s'; err: %w", hash, retryErr)
+						}
+					}
+
 					fields := []interface{}{
 						"txHash", hash,
 						"waitedBlocks", waitedBlockCount,
