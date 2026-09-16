@@ -294,6 +294,8 @@ func (c *Client) WaitForTx(ctx context.Context, hash string, debug *txWaitDebugI
 					if debug != nil {
 						fields = append(fields, debug.logFields()...)
 					}
+					// Full query/report dump is reserved for this terminal miss:
+					// waited 2+ blocks and, at timeoutHeight, retried /tx once.
 					c.logger.Error("Transaction not found on chain after waiting for blocks", fields...)
 					if debug != nil {
 						if heightErr == nil {
@@ -317,15 +319,14 @@ func (c *Client) WaitForTx(ctx context.Context, hash string, debug *txWaitDebugI
 
 				// Skip warn on the first lookup: broadcast only means mempool
 				// acceptance, so "not found" before any block wait is expected.
+				// Keep this short; dump query/report details only if the tx is
+				// still missing after every wait and the timeout-height retry.
 				if waitedBlockCount >= 1 {
-					fields := []interface{}{
+					c.logger.Warn(
+						"Transaction not found on chain, waiting for next block",
 						"txHash", hash,
 						"waitedBlocks", waitedBlockCount,
-					}
-					if debug != nil {
-						fields = append(fields, debug.logFields()...)
-					}
-					c.logger.Warn("Transaction not found on chain, waiting for next block", fields...)
+					)
 				}
 
 				if err := c.WaitForNextBlock(ctx); err != nil {
@@ -601,10 +602,6 @@ func (c *Client) sendTxOnce(ctx context.Context, queryMetaId uint64, bucket stri
 
 	debugInfo := c.buildTxWaitDebugInfo(
 		queryMetaId, bucket, broadcastHeight, timeoutHeight, timeoutTimestamp, gasEstimate, res.TxHash, msg[0],
-	)
-	c.logger.Info(
-		"Transaction broadcast accepted, waiting for inclusion",
-		debugInfo.logFields()...,
 	)
 
 	txnResponse, err := c.WaitForTx(ctx, res.TxHash, &debugInfo)
