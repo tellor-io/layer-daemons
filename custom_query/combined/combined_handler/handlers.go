@@ -25,17 +25,26 @@ type CombinedHandler interface {
 }
 
 type ParallelFetcher struct {
-	mu      sync.Mutex
-	results map[string]any
-	errors  map[string]error
-	wg      sync.WaitGroup
+	mu       sync.Mutex
+	results  map[string]any
+	errors   map[string]error
+	pending  int
+	complete chan struct{}
 }
 
 func NewParallelFetcher() *ParallelFetcher {
 	return &ParallelFetcher{
-		results: make(map[string]any),
-		errors:  make(map[string]error),
+		results:  make(map[string]any),
+		errors:   make(map[string]error),
+		complete: make(chan struct{}, 16),
 	}
+}
+
+func (p *ParallelFetcher) markDone() {
+	p.mu.Lock()
+	p.pending--
+	p.mu.Unlock()
+	p.complete <- struct{}{}
 }
 
 func (p *ParallelFetcher) FetchContract(
@@ -46,9 +55,12 @@ func (p *ParallelFetcher) FetchContract(
 	functionSig string,
 	args []string,
 ) {
-	p.wg.Add(1)
+	p.mu.Lock()
+	p.pending++
+	p.mu.Unlock()
+
 	go func() {
-		defer p.wg.Done()
+		defer p.markDone()
 
 		result, err := reader.ReadContract(ctx, address, functionSig, args)
 
@@ -67,9 +79,12 @@ func (p *ParallelFetcher) FetchRPC(
 	key string,
 	reader *rpcreader.Reader,
 ) {
-	p.wg.Add(1)
+	p.mu.Lock()
+	p.pending++
+	p.mu.Unlock()
+
 	go func() {
-		defer p.wg.Done()
+		defer p.markDone()
 
 		result, err := reader.FetchJSON(ctx)
 
@@ -83,8 +98,40 @@ func (p *ParallelFetcher) FetchRPC(
 	}()
 }
 
+// Wait blocks until all fetches complete (legacy callers).
 func (p *ParallelFetcher) Wait() {
-	p.wg.Wait()
+	p.WaitWithContext(context.Background())
+}
+
+// WaitWithContext waits until all fetches finish or the context/deadline expires.
+func (p *ParallelFetcher) WaitWithContext(ctx context.Context) {
+	p.mu.Lock()
+	pending := p.pending
+	p.mu.Unlock()
+	if pending == 0 {
+		return
+	}
+
+	var timer *time.Timer
+	var timerCh <-chan time.Time
+	if deadline, ok := ctx.Deadline(); ok {
+		timer = time.NewTimer(time.Until(deadline))
+		defer timer.Stop()
+		timerCh = timer.C
+	}
+
+	for pending > 0 {
+		select {
+		case <-p.complete:
+			p.mu.Lock()
+			pending = p.pending
+			p.mu.Unlock()
+		case <-timerCh:
+			return
+		case <-ctx.Done():
+			return
+		}
+	}
 }
 
 func (p *ParallelFetcher) GetResult(key string) (any, error) {

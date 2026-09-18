@@ -59,7 +59,7 @@ func (h *SUSNPriceHandler) FetchValue(
 	}
 
 	// Wait for all fetches to complete
-	fetcher.Wait()
+	fetcher.WaitWithContext(ctx)
 
 	if err := checkDataAge(fetchedAt, maxDataAge); err != nil {
 		return 0, fmt.Errorf("susn: %w", err)

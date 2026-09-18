@@ -38,7 +38,7 @@ func TestSubgraphUniswapPoolPairHandler_targetAsToken0(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	rdr, err := reader.NewReader(srv.URL, http.MethodPost, `{}`, map[string]string{"Content-Type": "application/json"}, nil, 5000, susdeUsdtPoolParams())
+	rdr, err := reader.NewReader(srv.URL, http.MethodPost, `{}`, map[string]string{"Content-Type": "application/json"}, nil, 5000, susdeUsdtPoolParams(), 1)
 	require.NoError(t, err)
 
 	cache := pricefeedtypes.NewMarketToExchangePrices(time.Minute)
@@ -75,7 +75,7 @@ func TestSubgraphUniswapPoolPairHandler_targetAsToken1(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	rdr, err := reader.NewReader(srv.URL, http.MethodPost, `{}`, map[string]string{"Content-Type": "application/json"}, nil, 5000, susdeUsdtPoolParams())
+	rdr, err := reader.NewReader(srv.URL, http.MethodPost, `{}`, map[string]string{"Content-Type": "application/json"}, nil, 5000, susdeUsdtPoolParams(), 1)
 	require.NoError(t, err)
 
 	cache := pricefeedtypes.NewMarketToExchangePrices(time.Minute)
@@ -112,7 +112,7 @@ func TestSubgraphUniswapPoolPairHandler_invert(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	rdr, err := reader.NewReader(srv.URL, http.MethodPost, `{}`, map[string]string{"Content-Type": "application/json"}, nil, 5000, susdeUsdtPoolParams())
+	rdr, err := reader.NewReader(srv.URL, http.MethodPost, `{}`, map[string]string{"Content-Type": "application/json"}, nil, 5000, susdeUsdtPoolParams(), 1)
 	require.NoError(t, err)
 
 	cache := pricefeedtypes.NewMarketToExchangePrices(time.Minute)
@@ -140,7 +140,7 @@ func TestSubgraphUniswapPoolPairHandler_graphqlErrors(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	rdr, err := reader.NewReader(srv.URL, http.MethodPost, `{}`, map[string]string{"Content-Type": "application/json"}, nil, 5000, susdeUsdtPoolParams())
+	rdr, err := reader.NewReader(srv.URL, http.MethodPost, `{}`, map[string]string{"Content-Type": "application/json"}, nil, 5000, susdeUsdtPoolParams(), 1)
 	require.NoError(t, err)
 
 	var h SubgraphUniswapPoolPairHandler
@@ -160,7 +160,7 @@ func TestSubgraphUniswapPoolPairHandler_missingParams(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	rdr, err := reader.NewReader(srv.URL, http.MethodPost, `{}`, map[string]string{"Content-Type": "application/json"}, nil, 5000, nil)
+	rdr, err := reader.NewReader(srv.URL, http.MethodPost, `{}`, map[string]string{"Content-Type": "application/json"}, nil, 5000, nil, 1)
 	require.NoError(t, err)
 
 	var h SubgraphUniswapPoolPairHandler
@@ -186,7 +186,7 @@ func TestSubgraphUniswapPoolPairHandler_metaBlockTimestampStale(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	rdr, err := reader.NewReader(srv.URL, http.MethodPost, `{}`, map[string]string{"Content-Type": "application/json"}, nil, 5000, susdeUsdtPoolParams())
+	rdr, err := reader.NewReader(srv.URL, http.MethodPost, `{}`, map[string]string{"Content-Type": "application/json"}, nil, 5000, susdeUsdtPoolParams(), 1)
 	require.NoError(t, err)
 
 	cache := pricefeedtypes.NewMarketToExchangePrices(time.Minute)
@@ -225,7 +225,7 @@ func TestSubgraphUniswapPoolPairHandler_metaBlockTimestampFresh(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	rdr, err := reader.NewReader(srv.URL, http.MethodPost, `{}`, map[string]string{"Content-Type": "application/json"}, nil, 5000, susdeUsdtPoolParams())
+	rdr, err := reader.NewReader(srv.URL, http.MethodPost, `{}`, map[string]string{"Content-Type": "application/json"}, nil, 5000, susdeUsdtPoolParams(), 1)
 	require.NoError(t, err)
 
 	cache := pricefeedtypes.NewMarketToExchangePrices(time.Minute)
