@@ -166,6 +166,28 @@ func TestRetryLogic(t *testing.T) {
 	}
 }
 
+func TestNoRetryOnTimeout(t *testing.T) {
+	attempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		select {
+		case <-r.Context().Done():
+			return
+		case <-time.After(200 * time.Millisecond):
+		}
+		require.NoError(t, json.NewEncoder(w).Encode(map[string]string{"status": "ok"}))
+	}))
+	defer server.Close()
+
+	reader, err := NewReader(server.URL, "GET", "", nil, nil, 50, nil, 2)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	_, err = reader.FetchJSON(ctx)
+	require.Error(t, err)
+	require.Equal(t, 1, attempts, "timeouts should not be retried")
+}
+
 func TestTimeout(t *testing.T) {
 	// Create test server that delays response
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

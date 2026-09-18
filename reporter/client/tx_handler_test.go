@@ -14,54 +14,53 @@ import (
 	"cosmossdk.io/log"
 )
 
-func TestGasEstimatorEscalation_NonBridge(t *testing.T) {
+func TestGasAdjustment_FixedPerBucket(t *testing.T) {
+	c := NewClient(log.NewNopLogger(), "0.001loya")
+
+	require.Equal(t, defaultGasAdjustment, c.gasEstimator.gasAdjustment("test-non-bridge"))
+	require.Equal(t, defaultGasAdjustment, c.gasEstimator.gasAdjustment(spotPriceGasBucketKey))
+	require.Equal(t, bridgeGasAdjustment, c.gasEstimator.gasAdjustment(bridgeGasBucketKey))
+}
+
+func TestBumpEstimateForOutOfGas(t *testing.T) {
 	c := NewClient(log.NewNopLogger(), "0.001loya")
 	bucket := "test-non-bridge"
 
-	require.Equal(t, 1.30, c.gasEstimator.currentGasAdjustment(bucket))
-	changed, from, to := c.gasEstimator.escalateGasLevel(bucket)
-	require.True(t, changed)
-	require.Equal(t, 1.30, from)
-	require.Equal(t, 1.6, to)
-	require.Equal(t, 1.6, c.gasEstimator.currentGasAdjustment(bucket))
+	newEstimate := c.gasEstimator.bumpEstimateForOutOfGas(bucket, 140_000)
+	require.Equal(t, uint64(210_000), newEstimate)
+	estimate, ok := c.gasEstimator.getCachedEstimate(bucket)
+	require.True(t, ok)
+	require.Equal(t, uint64(210_000), estimate)
 
-	changed, from, to = c.gasEstimator.escalateGasLevel(bucket)
-	require.True(t, changed)
-	require.Equal(t, 1.6, from)
-	require.Equal(t, 2.0, to)
-	require.Equal(t, 2.0, c.gasEstimator.currentGasAdjustment(bucket))
-
-	changed, from, to = c.gasEstimator.escalateGasLevel(bucket)
-	require.False(t, changed)
-	require.Equal(t, 2.0, from)
-	require.Equal(t, 2.0, to)
+	// Further OOGs keep bumping from GasWanted; adjustment stays fixed.
+	newEstimate = c.gasEstimator.bumpEstimateForOutOfGas(bucket, 210_000)
+	require.Equal(t, uint64(315_000), newEstimate)
+	require.Equal(t, defaultGasAdjustment, c.gasEstimator.gasAdjustment(bucket))
 }
 
-func TestGasEstimatorEscalation_Bridge(t *testing.T) {
+func TestBumpEstimateForOutOfGas_Bridge(t *testing.T) {
 	c := NewClient(log.NewNopLogger(), "0.001loya")
 
-	require.Equal(t, 1.75, c.gasEstimator.currentGasAdjustment(bridgeGasBucketKey))
-	changed, from, to := c.gasEstimator.escalateGasLevel(bridgeGasBucketKey)
-	require.True(t, changed)
-	require.Equal(t, 1.75, from)
-	require.Equal(t, 2.0, to)
-
-	changed, from, to = c.gasEstimator.escalateGasLevel(bridgeGasBucketKey)
-	require.False(t, changed)
-	require.Equal(t, 2.0, from)
-	require.Equal(t, 2.0, to)
+	require.Equal(t, bridgeGasAdjustment, c.gasEstimator.gasAdjustment(bridgeGasBucketKey))
+	newEstimate := c.gasEstimator.bumpEstimateForOutOfGas(bridgeGasBucketKey, 200_000)
+	require.Equal(t, uint64(300_000), newEstimate)
+	require.Equal(t, bridgeGasAdjustment, c.gasEstimator.gasAdjustment(bridgeGasBucketKey))
 }
 
-func TestEscalationAffectsOnlyRelevantBucket(t *testing.T) {
+func TestBumpEstimateAffectsOnlyRelevantBucket(t *testing.T) {
 	c := NewClient(log.NewNopLogger(), "0.001loya")
 
 	otherBucket := "*oracletypes.MsgWithdrawTip"
-	require.Equal(t, 1.30, c.gasEstimator.currentGasAdjustment(otherBucket))
+	c.gasEstimator.setEstimate(otherBucket, 100_000)
 
-	changed, _, _ := c.gasEstimator.escalateGasLevel(spotPriceGasBucketKey)
-	require.True(t, changed)
-	require.Equal(t, 1.6, c.gasEstimator.currentGasAdjustment(spotPriceGasBucketKey))
-	require.Equal(t, 1.30, c.gasEstimator.currentGasAdjustment(otherBucket))
+	_ = c.gasEstimator.bumpEstimateForOutOfGas(spotPriceGasBucketKey, 100_000)
+	estimate, ok := c.gasEstimator.getCachedEstimate(spotPriceGasBucketKey)
+	require.True(t, ok)
+	require.Equal(t, uint64(150_000), estimate)
+
+	otherEstimate, ok := c.gasEstimator.getCachedEstimate(otherBucket)
+	require.True(t, ok)
+	require.Equal(t, uint64(100_000), otherEstimate)
 }
 
 func TestRetryPolicyMatrix(t *testing.T) {
@@ -82,22 +81,54 @@ func TestRetryPolicyMatrix(t *testing.T) {
 	require.Equal(t, 3, c.maxAttemptsForTx(nonSpotMsg))
 }
 
-func TestResetAllGasLevelsToBase_IsLazy(t *testing.T) {
+func TestClearAllEstimates(t *testing.T) {
 	c := NewClient(log.NewNopLogger(), "0.001loya")
 	bucket := "lazy-reset"
 
-	c.gasEstimator.setEstimate(bucket, 111)
-	changed, _, _ := c.gasEstimator.escalateGasLevel(bucket)
-	require.True(t, changed)
-	require.Equal(t, 1.6, c.gasEstimator.currentGasAdjustment(bucket))
+	c.gasEstimator.setEstimate(bucket, 140)
+	newEstimate := c.gasEstimator.bumpEstimateForOutOfGas(bucket, 0)
+	require.Equal(t, uint64(210), newEstimate)
 	estimate, ok := c.gasEstimator.getCachedEstimate(bucket)
-	require.False(t, ok)
-	require.Equal(t, uint64(111), estimate)
+	require.True(t, ok)
+	require.Equal(t, uint64(210), estimate)
 
 	c.resetAllGasLevelsToBase()
-	require.Equal(t, 1.30, c.gasEstimator.currentGasAdjustment(bucket))
+	require.Equal(t, defaultGasAdjustment, c.gasEstimator.gasAdjustment(bucket))
 	_, ok = c.gasEstimator.getCachedEstimate(bucket)
 	require.False(t, ok)
+}
+
+func TestBumpEstimate_PrefersGasWantedOverCache(t *testing.T) {
+	c := NewClient(log.NewNopLogger(), "0.001loya")
+	bucket := "scale-wanted"
+
+	c.gasEstimator.setEstimate(bucket, 50_000) // stale; GasWanted should win
+	newEstimate := c.gasEstimator.bumpEstimateForOutOfGas(bucket, 140_000)
+	require.Equal(t, uint64(210_000), newEstimate)
+	estimate, ok := c.gasEstimator.getCachedEstimate(bucket)
+	require.True(t, ok)
+	require.Equal(t, uint64(210_000), estimate)
+}
+
+func TestRaiseEstimateIfHigher(t *testing.T) {
+	c := NewClient(log.NewNopLogger(), "0.001loya")
+	bucket := "raise-only"
+
+	c.gasEstimator.setEstimate(bucket, 200_000)
+
+	updated, previous := c.gasEstimator.raiseEstimateIfHigher(bucket, 180_000)
+	require.False(t, updated)
+	require.Equal(t, uint64(200_000), previous)
+	estimate, ok := c.gasEstimator.getCachedEstimate(bucket)
+	require.True(t, ok)
+	require.Equal(t, uint64(200_000), estimate)
+
+	updated, previous = c.gasEstimator.raiseEstimateIfHigher(bucket, 250_000)
+	require.True(t, updated)
+	require.Equal(t, uint64(200_000), previous)
+	estimate, ok = c.gasEstimator.getCachedEstimate(bucket)
+	require.True(t, ok)
+	require.Equal(t, uint64(250_000), estimate)
 }
 
 func TestGasEstimatorConcurrentAccess(t *testing.T) {
@@ -110,8 +141,9 @@ func TestGasEstimatorConcurrentAccess(t *testing.T) {
 		go func(idx int) {
 			defer wg.Done()
 			c.gasEstimator.setEstimate(bucket, uint64(100+idx))
-			c.gasEstimator.currentGasAdjustment(bucket)
-			c.gasEstimator.escalateGasLevel(bucket)
+			c.gasEstimator.gasAdjustment(bucket)
+			c.gasEstimator.bumpEstimateForOutOfGas(bucket, uint64(100+idx))
+			c.gasEstimator.raiseEstimateIfHigher(bucket, uint64(200+idx))
 			c.gasEstimator.getCachedEstimate(bucket)
 		}(i)
 	}

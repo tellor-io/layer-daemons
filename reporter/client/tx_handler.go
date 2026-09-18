@@ -31,20 +31,22 @@ const (
 	defaultNonBridgeBucketConfigKey = "default-non-bridge"
 	outOfGasCode                    = uint32(11)
 	defaultMaxTxAttempts            = 3
+	defaultGasAdjustment            = 1.5
+	bridgeGasAdjustment             = 1.75
+	outOfGasBumpFactor              = 1.5
+	asyncGasRefreshTimeout          = 15 * time.Second
 	// Brief pause before a final /tx lookup at timeout height. Status can
 	// advance to the inclusion height slightly before the tx indexer serves it.
 	txIndexRetryDelay = 150 * time.Millisecond
 )
 
 type gasBucketConfig struct {
-	levels  []float64
-	baseIdx int
+	adjustment float64
 }
 
 type gasBucketState struct {
 	cachedEstimate uint64
 	hasEstimate    bool
-	levelIdx       int
 }
 
 type gasEstimateState struct {
@@ -68,21 +70,18 @@ func (s *gasEstimateState) configForBucket(bucket string) gasBucketConfig {
 }
 
 func (s *gasEstimateState) getOrInitBucketState(bucket string) gasBucketState {
-	cfg := s.configForBucket(bucket)
 	state, ok := s.bucketState[bucket]
 	if !ok {
-		state = gasBucketState{levelIdx: cfg.baseIdx}
+		state = gasBucketState{}
 		s.bucketState[bucket] = state
 	}
 	return state
 }
 
-func (s *gasEstimateState) currentGasAdjustment(bucket string) float64 {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	state := s.getOrInitBucketState(bucket)
-	cfg := s.configForBucket(bucket)
-	return cfg.levels[state.levelIdx]
+func (s *gasEstimateState) gasAdjustment(bucket string) float64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.configForBucket(bucket).adjustment
 }
 
 func (s *gasEstimateState) getCachedEstimate(bucket string) (uint64, bool) {
@@ -101,44 +100,49 @@ func (s *gasEstimateState) setEstimate(bucket string, gas uint64) {
 	s.bucketState[bucket] = state
 }
 
-func (s *gasEstimateState) escalateGasLevel(bucket string) (bool, float64, float64) {
+// bumpEstimateForOutOfGas sets the cached limit to gasWanted * outOfGasBumpFactor
+// so the hot-path retry can proceed without re-simulating.
+func (s *gasEstimateState) bumpEstimateForOutOfGas(bucket string, gasWanted uint64) uint64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	state := s.getOrInitBucketState(bucket)
-	cfg := s.configForBucket(bucket)
-	from := cfg.levels[state.levelIdx]
-	if state.levelIdx >= len(cfg.levels)-1 {
-		return false, from, from
+	base := gasWanted
+	if base == 0 {
+		base = state.cachedEstimate
 	}
-	state.levelIdx++
-	state.hasEstimate = false
-	to := cfg.levels[state.levelIdx]
+	if base == 0 {
+		return 0
+	}
+	newEstimate := uint64(float64(base) * outOfGasBumpFactor)
+	if newEstimate <= base {
+		newEstimate = base + 1
+	}
+	state.cachedEstimate = newEstimate
+	state.hasEstimate = true
 	s.bucketState[bucket] = state
-	return true, from, to
+	return newEstimate
 }
 
-func (s *gasEstimateState) setBucketToMaxLevel(bucket string) (float64, float64) {
+// raiseEstimateIfHigher updates the cache only when estimate is strictly greater
+// than the current cached value (or when no cache exists yet).
+func (s *gasEstimateState) raiseEstimateIfHigher(bucket string, estimate uint64) (updated bool, previous uint64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	state := s.getOrInitBucketState(bucket)
-	cfg := s.configForBucket(bucket)
-	from := cfg.levels[state.levelIdx]
-	maxIdx := len(cfg.levels) - 1
-	if state.levelIdx != maxIdx {
-		state.levelIdx = maxIdx
-		state.hasEstimate = false
-		s.bucketState[bucket] = state
+	previous = state.cachedEstimate
+	if state.hasEstimate && estimate <= state.cachedEstimate {
+		return false, previous
 	}
-	to := cfg.levels[state.levelIdx]
-	return from, to
+	state.cachedEstimate = estimate
+	state.hasEstimate = true
+	s.bucketState[bucket] = state
+	return true, previous
 }
 
-func (s *gasEstimateState) resetAllGasLevelsToBase() {
+func (s *gasEstimateState) clearAllEstimates() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for bucket, state := range s.bucketState {
-		cfg := s.configForBucket(bucket)
-		state.levelIdx = cfg.baseIdx
 		state.hasEstimate = false
 		state.cachedEstimate = 0
 		s.bucketState[bucket] = state
@@ -149,7 +153,7 @@ func newFactory(clientCtx client.Context) tx.Factory {
 	return tx.Factory{}.
 		WithChainID(clientCtx.ChainID).
 		WithKeybase(clientCtx.Keyring).
-		WithGasAdjustment(1.30).
+		WithGasAdjustment(defaultGasAdjustment).
 		WithGas(defaultGas).
 		WithSignMode(signing.SignMode_SIGN_MODE_DIRECT).
 		WithAccountRetriever(clientCtx.AccountRetriever).
@@ -435,7 +439,7 @@ func (c *Client) EstimateGas(ctx context.Context, clientCtx client.Context, txf 
 	if gasEstimate, ok := c.gasEstimator.getCachedEstimate(bucket); ok {
 		return gasEstimate, nil
 	}
-	adjustment := c.gasEstimator.currentGasAdjustment(bucket)
+	adjustment := c.gasEstimator.gasAdjustment(bucket)
 	txf = txf.WithGasAdjustment(adjustment)
 	_, gasEstimate, err := tx.CalculateGas(clientCtx, txf, msg...)
 	if err != nil {
@@ -446,7 +450,43 @@ func (c *Client) EstimateGas(ctx context.Context, clientCtx client.Context, txf 
 }
 
 func (c *Client) resetAllGasLevelsToBase() {
-	c.gasEstimator.resetAllGasLevelsToBase()
+	c.gasEstimator.clearAllEstimates()
+}
+
+// refreshGasEstimateAsync re-simulates gas off the hot path after an out-of-gas
+// retry. The cache is only raised when the new estimate is higher than what we
+// already have (including the immediate 1.5x OOG bump).
+func (c *Client) refreshGasEstimateAsync(bucket string, msgs []sdk.Msg) {
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), asyncGasRefreshTimeout)
+		defer cancel()
+
+		c.grpcMu.RLock()
+		clientCtx := c.currentCosmosContext().WithCmdContext(ctx)
+		txf := newFactory(clientCtx).WithGasAdjustment(c.gasEstimator.gasAdjustment(bucket))
+		var err error
+		txf, err = txf.Prepare(clientCtx)
+		if err != nil {
+			c.grpcMu.RUnlock()
+			c.logger.Warn("Async gas refresh prepare failed", "bucket", bucket, "error", err)
+			return
+		}
+		_, gasEstimate, err := tx.CalculateGas(clientCtx, txf, msgs...)
+		c.grpcMu.RUnlock()
+		if err != nil {
+			c.logger.Warn("Async gas refresh simulation failed", "bucket", bucket, "error", err)
+			return
+		}
+
+		updated, previous := c.gasEstimator.raiseEstimateIfHigher(bucket, gasEstimate)
+		c.logger.Info(
+			"Async gas refresh completed",
+			"bucket", bucket,
+			"simulated", gasEstimate,
+			"previous", previous,
+			"updated", updated,
+		)
+	}()
 }
 
 func (c *Client) sendTx(ctx context.Context, queryMetaId uint64, isBridge bool, msg ...sdk.Msg) (*cmttypes.ResultTx, error) {
@@ -503,28 +543,26 @@ func (c *Client) sendTx(ctx context.Context, queryMetaId uint64, isBridge bool, 
 			return txnResponse, nil
 		}
 
-		changed, from, to := c.gasEstimator.escalateGasLevel(bucket)
+		newEstimate := c.gasEstimator.bumpEstimateForOutOfGas(bucket, uint64(txnResponse.TxResult.GasWanted))
 		c.logger.Info(
 			"Detected out-of-gas tx response",
 			"code", txnResponse.TxResult.Code,
 			"bucket", bucket,
 			"attempt", attempt,
-			"escalated", changed,
-			"from", from,
-			"to", to,
+			"gasAdjustment", c.gasEstimator.gasAdjustment(bucket),
+			"gasWanted", txnResponse.TxResult.GasWanted,
+			"gasUsed", txnResponse.TxResult.GasUsed,
+			"newGasEstimate", newEstimate,
+			"bumpFactor", outOfGasBumpFactor,
 		)
-		if !changed {
-			return txnResponse, nil
-		}
+		c.refreshGasEstimateAsync(bucket, msg)
 	}
 
 	if spotPriceTx {
-		from, to := c.gasEstimator.setBucketToMaxLevel(bucket)
 		c.logger.Info(
-			"Skipping third spot price send attempt after two failures",
+			"Skipping further spot price send attempts after out-of-gas retries",
 			"bucket", bucket,
-			"from", from,
-			"to", to,
+			"maxAttempts", maxAttempts,
 		)
 	}
 	return lastResp, nil

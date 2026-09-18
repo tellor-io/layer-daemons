@@ -10,14 +10,15 @@ const (
 	QueryTypeSpotPrice     = "spot_price"
 	QueryTypeBridgeDeposit = "bridge_deposit"
 
-	DefaultFetchTimeout        = 1500 * time.Millisecond
+	DefaultFetchTimeout          = 2000 * time.Millisecond
 	DefaultAggregationBuffer     = 100 * time.Millisecond
-	DefaultPostFetchReserve      = 2000 * time.Millisecond
-	DefaultPerSourceTimeout      = 700 * time.Millisecond
-	DefaultPerSourceRetryTimeout = 500 * time.Millisecond
+	// Post-fetch only needs encode + trySend; inclusion runs on a separate tx ctx.
+	DefaultPostFetchReserve      = 500 * time.Millisecond
+	DefaultPerSourceTimeout      = 1000 * time.Millisecond
+	DefaultPerSourceRetryTimeout = 750 * time.Millisecond
 	DefaultRetryDelay            = 75 * time.Millisecond
 	DefaultMaxSourceRetries      = 1
-	MinRetryBudget               = 400 * time.Millisecond
+	MinRetryBudget               = 900 * time.Millisecond
 )
 
 // TimeoutDefaults holds fetch timeout settings for a query category.
@@ -31,10 +32,10 @@ type TimeoutDefaults struct {
 
 var StaticTimeoutDefaultsByQueryType = map[string]TimeoutDefaults{
 	QueryTypeSpotPrice: {
-		FetchTimeoutMs:      1500,
-		PerSourceTimeoutMs:  700,
+		FetchTimeoutMs:      2000,
+		PerSourceTimeoutMs:  1000,
 		MaxSourceRetries:    1,
-		PostFetchReserveMs:  2000,
+		PostFetchReserveMs:  500,
 		AggregationBufferMs: 100,
 	},
 	QueryTypeBridgeDeposit: {

@@ -10,10 +10,10 @@ import (
 
 func TestResolveQueryTimeoutsSpotPriceDefaults(t *testing.T) {
 	resolved := ResolveQueryTimeouts(QueryConfig{}, mergedConfigDefaults(nil))
-	require.Equal(t, 1500, resolved.FetchTimeoutMs)
-	require.Equal(t, 700, resolved.PerSourceTimeoutMs)
+	require.Equal(t, 2000, resolved.FetchTimeoutMs)
+	require.Equal(t, 1000, resolved.PerSourceTimeoutMs)
 	require.Equal(t, 1, resolved.MaxSourceRetries)
-	require.Equal(t, 2000, resolved.PostFetchReserveMs)
+	require.Equal(t, 500, resolved.PostFetchReserveMs)
 }
 
 func TestResolveReaderTimeoutsBridgeDepositDefaults(t *testing.T) {

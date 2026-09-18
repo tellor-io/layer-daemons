@@ -22,10 +22,10 @@ const (
 	defaultCustomQueryTomlTemplate = `# This is a TOML config file.
 
 [defaults.spot_price]
-fetch_timeout_ms = 1500
-per_source_timeout_ms = 700
+fetch_timeout_ms = 2000
+per_source_timeout_ms = 1000
 max_source_retries = 1
-post_fetch_reserve_ms = 2000
+post_fetch_reserve_ms = 500
 aggregation_buffer_ms = 100
 
 [defaults.bridge_deposit]

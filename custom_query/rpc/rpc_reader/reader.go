@@ -40,7 +40,7 @@ func NewReader(url, method, query string, headers map[string]string, responsePat
 	}
 
 	if timeoutMs <= 0 {
-		timeoutMs = 1500
+		timeoutMs = 1000
 	}
 	if maxRetries <= 0 {
 		maxRetries = 1
@@ -164,20 +164,26 @@ func isTransientRPCError(err error) bool {
 	if err == nil {
 		return false
 	}
+	// Do not retry parent/per-attempt deadline failures: another attempt rarely
+	// finishes inside the remaining collection window and doubles hung-source cost.
 	if errors.Is(err, context.DeadlineExceeded) {
-		return true
+		return false
 	}
 	var netErr net.Error
 	if errors.As(err, &netErr) && netErr.Timeout() {
-		return true
+		return false
 	}
 	msg := err.Error()
+	if strings.Contains(msg, "context deadline exceeded") ||
+		strings.Contains(msg, "Client.Timeout exceeded") ||
+		strings.Contains(msg, "timeout") {
+		return false
+	}
 	return strings.Contains(msg, "connection reset") ||
 		strings.Contains(msg, "429") ||
 		strings.Contains(msg, "502") ||
 		strings.Contains(msg, "503") ||
-		strings.Contains(msg, "504") ||
-		strings.Contains(msg, "timeout")
+		strings.Contains(msg, "504")
 }
 
 func hasRetryBudget(ctx context.Context) bool {
@@ -185,7 +191,7 @@ func hasRetryBudget(ctx context.Context) bool {
 	if !ok {
 		return true
 	}
-	return time.Until(deadline) >= 400*time.Millisecond
+	return time.Until(deadline) >= 900*time.Millisecond
 }
 
 func (r *Reader) ExtractValueFromJSON(data []byte, path []string) (any, error) {

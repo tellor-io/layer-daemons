@@ -44,8 +44,8 @@ const (
 	primaryEndpointCheckInterval = 5 * time.Minute
 	primaryEndpointProbeTimeout  = 10 * time.Second
 
-	defaultTxBroadcastTimeout  = 15 * time.Second
-	defaultUnorderedTxTimeout  = 30 * time.Second
+	defaultTxBroadcastTimeout    = 15 * time.Second
+	defaultUnorderedTxTimeout    = 30 * time.Second
 	defaultTxTimeoutHeightOffset = uint64(2)
 )
 
@@ -184,10 +184,10 @@ type Client struct {
 	PriceGuard *PriceGuard
 	// Gas estimate refresh interval; <=0 disables periodic refresh.
 	refreshGasEstimatesInterval time.Duration
-	txBroadcastTimeout            time.Duration
-	unorderedTxTimeout            time.Duration
-	txTimeoutHeightOffset         uint64
-	gasEstimator                  *gasEstimateState
+	txBroadcastTimeout          time.Duration
+	unorderedTxTimeout          time.Duration
+	txTimeoutHeightOffset       uint64
+	gasEstimator                *gasEstimateState
 
 	// Resources that need cleanup
 	grpcMu           sync.RWMutex
@@ -224,12 +224,10 @@ func NewClient(logger log.Logger, valGasMin string) *Client {
 		txTimeoutHeightOffset: defaultTxTimeoutHeightOffset,
 		gasEstimator: newGasEstimateState(map[string]gasBucketConfig{
 			bridgeGasBucketKey: {
-				levels:  []float64{1.75, 2.0},
-				baseIdx: 0,
+				adjustment: bridgeGasAdjustment,
 			},
 			defaultNonBridgeBucketConfigKey: {
-				levels:  []float64{1.30, 1.6, 2.0},
-				baseIdx: 0,
+				adjustment: defaultGasAdjustment,
 			},
 		}),
 	}
