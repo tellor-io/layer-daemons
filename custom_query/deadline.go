@@ -10,15 +10,12 @@ const (
 	QueryTypeSpotPrice     = "spot_price"
 	QueryTypeBridgeDeposit = "bridge_deposit"
 
-	DefaultFetchTimeout          = 2000 * time.Millisecond
-	DefaultAggregationBuffer     = 100 * time.Millisecond
+	DefaultFetchTimeout      = 2000 * time.Millisecond
+	DefaultAggregationBuffer = 100 * time.Millisecond
 	// Post-fetch only needs encode + trySend; inclusion runs on a separate tx ctx.
-	DefaultPostFetchReserve      = 500 * time.Millisecond
-	DefaultPerSourceTimeout      = 1000 * time.Millisecond
-	DefaultPerSourceRetryTimeout = 750 * time.Millisecond
-	DefaultRetryDelay            = 75 * time.Millisecond
-	DefaultMaxSourceRetries      = 1
-	MinRetryBudget               = 900 * time.Millisecond
+	DefaultPostFetchReserve = 500 * time.Millisecond
+	DefaultPerSourceTimeout = 1000 * time.Millisecond
+	DefaultMaxSourceRetries = 1
 )
 
 // TimeoutDefaults holds fetch timeout settings for a query category.
@@ -198,11 +195,4 @@ func collectionDeadline(ctx context.Context, query QueryConfig) time.Time {
 		}
 	}
 	return deadline
-}
-
-func hasRetryBudget(ctx context.Context) bool {
-	if deadline, ok := ctx.Deadline(); ok {
-		return time.Until(deadline) >= MinRetryBudget
-	}
-	return true
 }

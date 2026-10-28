@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	rpcreader "github.com/tellor-io/layer-daemons/custom_query/rpc/rpc_reader"
 	"github.com/stretchr/testify/require"
+	rpcreader "github.com/tellor-io/layer-daemons/custom_query/rpc/rpc_reader"
 )
 
 func makeGenericRPCReaders(t *testing.T, count int, handler http.HandlerFunc) []RpcHandler {
@@ -239,7 +239,7 @@ func TestCollectionDeadlineUsesContext(t *testing.T) {
 	defer cancel()
 
 	deadline := collectionDeadline(ctx, QueryConfig{FetchTimeoutMs: 5000})
-	require.True(t, deadline.Before(time.Now().Add(500 * time.Millisecond)))
+	require.True(t, deadline.Before(time.Now().Add(500*time.Millisecond)))
 }
 
 func okPriceHandler(w http.ResponseWriter, _ *http.Request) {

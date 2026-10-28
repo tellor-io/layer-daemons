@@ -35,7 +35,7 @@ type ethClient struct {
 	mu      sync.RWMutex
 }
 
-func NewReader(urls []string, timeoutMs int, maxRetries int) (*Reader, error) {
+func NewReader(urls []string, timeoutMs, maxRetries int) (*Reader, error) {
 	if len(urls) == 0 {
 		return nil, fmt.Errorf("no RPC endpoints provided")
 	}

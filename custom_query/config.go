@@ -80,9 +80,9 @@ type QueryConfig struct {
 	PostFetchReserveMs  int               `toml:"post_fetch_reserve_ms"`
 	AggregationBufferMs int               `toml:"aggregation_buffer_ms"`
 	Endpoints           []EndpointConfig  `toml:"endpoints"`
-	ContractReaders   []ContractHandler `toml:"-"`
-	RpcReaders        []RpcHandler      `toml:"-"`
-	CombinedReaders   []CombinedHandler `toml:"-"`
+	ContractReaders     []ContractHandler `toml:"-"`
+	RpcReaders          []RpcHandler      `toml:"-"`
+	CombinedReaders     []CombinedHandler `toml:"-"`
 }
 
 type EndpointConfig struct {
