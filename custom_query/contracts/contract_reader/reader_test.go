@@ -198,7 +198,7 @@ func TestReadContractIntegration(t *testing.T) {
 		t.Skipf("ETH_MAINNET_RPC_NODES not set, skipping integration test: %v", err)
 	}
 
-	reader, err := NewReader(urls, 10)
+	reader, err := NewReader(urls, 10000, 1)
 	if err != nil {
 		t.Fatalf("Failed to create reader: %v", err)
 	}

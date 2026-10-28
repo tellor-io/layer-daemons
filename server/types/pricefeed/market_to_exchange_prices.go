@@ -34,6 +34,14 @@ func NewMarketToExchangePrices(maxPriceAge time.Duration) *MarketToExchangePrice
 	}
 }
 
+// PriceAggregateSnapshot is a point-in-time median of valid exchange prices for a market.
+type PriceAggregateSnapshot struct {
+	MarketId     uint32
+	Price        uint64
+	NumSources   int
+	LatestUpdate time.Time
+}
+
 // UpdatePrices updates market prices given a list of price updates. Prices are
 // only updated if the timestamp on the updates are greater than the timestamp
 // on existing prices.
@@ -51,6 +59,45 @@ func (mte *MarketToExchangePrices) UpdatePrices(
 		}
 		exchangeToPrices.UpdatePrices(marketPriceUpdate.ExchangePrices)
 	}
+}
+
+// GetValidPriceAggregates returns median aggregates for the given market IDs using
+// prices that are still within maxPriceAge of readTime. Markets with no valid prices
+// are omitted from the result.
+func (mte *MarketToExchangePrices) GetValidPriceAggregates(
+	marketIds []uint32,
+	readTime time.Time,
+) []PriceAggregateSnapshot {
+	cutoffTime := readTime.Add(-mte.maxPriceAge)
+
+	mte.Lock()
+	defer mte.Unlock()
+
+	snapshots := make([]PriceAggregateSnapshot, 0, len(marketIds))
+	for _, marketId := range marketIds {
+		exchangeToPrice, ok := mte.marketToExchangePrices[marketId]
+		if !ok {
+			continue
+		}
+
+		validPrices, latestUpdate := exchangeToPrice.GetValidPricesAndLatestUpdate(cutoffTime)
+		if len(validPrices) == 0 {
+			continue
+		}
+
+		median, err := lib.Median(validPrices)
+		if err != nil {
+			continue
+		}
+
+		snapshots = append(snapshots, PriceAggregateSnapshot{
+			MarketId:     marketId,
+			Price:        median,
+			NumSources:   len(validPrices),
+			LatestUpdate: latestUpdate,
+		})
+	}
+	return snapshots
 }
 
 // GetValidMedianPrices returns median prices for multiple markets.

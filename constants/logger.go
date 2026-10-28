@@ -14,6 +14,8 @@ const (
 	MarketIdLogKey   = "marketId"
 	PriceLogKey      = "Price"
 	ReasonLogKey     = "reason"
+	NumSourcesLogKey = "numSources"
+	TimestampLogKey  = "timestamp"
 
 	// Module and Submodule names are used to provide consistent key-value pairs for logging across the daemon.
 	PricefeedDaemonModuleName       = "pricefeed-daemon"
