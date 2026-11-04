@@ -327,6 +327,7 @@ func (c *Client) Start(
 	c.txTimeoutHeightOffset = viper.GetUint64("tx-timeout-height-offset")
 	if c.txTimeoutHeightOffset == 0 {
 		return fmt.Errorf("tx-timeout-height-offset must be greater than 0, got: %d", c.txTimeoutHeightOffset)
+	}
 
 	withdrawPowerThresholdValue := viper.GetString(daemonflags.FlagWithdrawToWalletPowerThreshold)
 	if withdrawPowerThresholdValue == "" {
