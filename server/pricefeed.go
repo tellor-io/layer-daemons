@@ -83,7 +83,7 @@ func (s *Server) logPricefeedCacheAggregates(updates []*daemontypes.MarketPriceU
 
 	now := time.Now()
 	for _, snapshot := range s.marketToExchange.GetValidPriceAggregates(marketIds, now) {
-		s.logger.Info(
+		s.logger.Debug(
 			"pricefeed cache updated",
 			constants.MarketIdLogKey, snapshot.MarketId,
 			constants.PriceLogKey, snapshot.Price,
