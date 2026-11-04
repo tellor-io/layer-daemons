@@ -37,6 +37,7 @@ import (
 	signingtypes "github.com/cosmos/cosmos-sdk/types/tx/signing"
 	authtypes "github.com/cosmos/cosmos-sdk/x/auth/types"
 	banktypes "github.com/cosmos/cosmos-sdk/x/bank/types"
+	stakingtypes "github.com/cosmos/cosmos-sdk/x/staking/types"
 )
 
 const (
@@ -156,6 +157,7 @@ type Client struct {
 	// Query clients
 	OracleQueryClient oracletypes.QueryClient
 	BankClient        banktypes.QueryClient
+	StakingClient     stakingtypes.QueryClient
 
 	ReporterClient  reportertypes.QueryClient
 	CmtService      cmtservice.ServiceClient
@@ -306,6 +308,15 @@ func (c *Client) Start(
 	autoUnbondingAmount := viper.GetUint32("auto-unbonding-amount")
 	autoUnbondingMaxStakePercentage := viper.GetString("auto-unbonding-max-stake-percentage")
 	c.refreshGasEstimatesInterval = viper.GetDuration("refresh-gas-estimates-interval")
+
+	withdrawPowerThresholdValue := viper.GetString(daemonflags.FlagWithdrawToWalletPowerThreshold)
+	if withdrawPowerThresholdValue == "" {
+		withdrawPowerThresholdValue = daemonflags.DefaultWithdrawToWalletPowerThreshold
+	}
+	withdrawPowerThreshold, err := math.LegacyNewDecFromStr(withdrawPowerThresholdValue)
+	if err != nil || !withdrawPowerThreshold.IsPositive() || withdrawPowerThreshold.GT(math.LegacyOneDec()) {
+		return fmt.Errorf("%s must be a decimal greater than 0 and at most 1", daemonflags.FlagWithdrawToWalletPowerThreshold)
+	}
 
 	if autoUnbondingFrequency > 0 {
 		if autoUnbondingFrequency > 21 {
@@ -509,6 +520,7 @@ func (c *Client) setGRPCConnection(conn *grpc.ClientConn) {
 	// Rebuild all generated clients so subsequent queries use the active connection.
 	c.OracleQueryClient = oracletypes.NewQueryClient(conn)
 	c.BankClient = banktypes.NewQueryClient(conn)
+	c.StakingClient = stakingtypes.NewQueryClient(conn)
 	c.ReporterClient = reportertypes.NewQueryClient(conn)
 	c.GlobalfeeClient = globalfeetypes.NewQueryClient(conn)
 	c.CmtService = cmtservice.NewServiceClient(conn)
