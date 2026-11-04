@@ -13,7 +13,7 @@ import (
 	"github.com/tellor-io/layer/utils"
 )
 
-func (c *Client) median(querydata []byte) (encodedValue string, rawPrice float64, err error) {
+func (c *Client) median(ctx context.Context, querydata []byte) (encodedValue string, rawPrice float64, err error) {
 	querydatastr := hex.EncodeToString(querydata)
 
 	for _, marketParam := range c.MarketParams {
@@ -38,7 +38,7 @@ func (c *Client) median(querydata []byte) (encodedValue string, rawPrice float64
 	if !ok {
 		return "", 0, fmt.Errorf("no config found for query data: %s", querydatastr)
 	}
-	results, err := customquery.FetchPrice(context.Background(), queryConfig, c.MarketToExchange)
+	results, err := customquery.FetchPrice(ctx, queryConfig, c.MarketToExchange)
 	c.logCustomQuerySourceErrors(queryIdStr, results)
 	if err != nil {
 		return "", 0, fmt.Errorf("failed to fetch price: %w", err)

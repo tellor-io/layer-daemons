@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
-	"time"
 
 	"github.com/tellor-io/layer-daemons/lib/metrics"
 	"github.com/tellor-io/layer/utils"
@@ -27,9 +26,8 @@ import (
 // )
 
 const (
-	bridgeDepositMaxRetries = 10               // Bridge deposits have ~1 hour window, so more retries are acceptable
-	maxConcurrentTxs        = 10               // Cap concurrent broadcast goroutines to prevent unbounded growth
-	txBroadcastTimeout      = 15 * time.Second // sign + broadcast + wait for block inclusion
+	bridgeDepositMaxRetries = 10 // Bridge deposits have ~1 hour window, so more retries are acceptable
+	maxConcurrentTxs        = 10 // Cap concurrent broadcast goroutines to prevent unbounded growth
 )
 
 func (c *Client) GenerateDepositMessages(ctx context.Context) error {
@@ -85,7 +83,7 @@ func (c *Client) GenerateDepositMessages(ctx context.Context) error {
 // }
 
 func (c *Client) GenerateAndBroadcastSpotPriceReport(ctx context.Context, qd []byte, querymeta *oracletypes.QueryMeta) error {
-	encodedValue, rawPrice, err := c.median(qd)
+	encodedValue, rawPrice, err := c.median(ctx, qd)
 	if err != nil {
 		return fmt.Errorf("error getting median from median client': %w", err)
 	}
@@ -229,7 +227,7 @@ func (c *Client) BroadcastTxMsgToChain(ctx context.Context) {
 					return
 				}
 
-				txCtx, cancel := context.WithTimeout(ctx, txBroadcastTimeout)
+				txCtx, cancel := context.WithTimeout(ctx, c.txBroadcastTimeout)
 				defer cancel()
 
 				if txInfo.isBridge && isBridgeDepositReportMsg(txInfo.Msg) {

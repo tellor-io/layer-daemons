@@ -12,6 +12,8 @@ import (
 	cmttypes "github.com/cometbft/cometbft/rpc/core/types"
 	globalfeetypes "github.com/strangelove-ventures/globalfee/x/globalfee/types"
 	"github.com/tellor-io/layer-daemons/lib/metrics"
+	"github.com/tellor-io/layer/utils"
+	oracletypes "github.com/tellor-io/layer/x/oracle/types"
 
 	"cosmossdk.io/math"
 
@@ -29,17 +31,22 @@ const (
 	defaultNonBridgeBucketConfigKey = "default-non-bridge"
 	outOfGasCode                    = uint32(11)
 	defaultMaxTxAttempts            = 3
+	defaultGasAdjustment            = 1.5
+	bridgeGasAdjustment             = 1.75
+	outOfGasBumpFactor              = 1.5
+	asyncGasRefreshTimeout          = 15 * time.Second
+	// Brief pause before a final /tx lookup at timeout height. Status can
+	// advance to the inclusion height slightly before the tx indexer serves it.
+	txIndexRetryDelay = 150 * time.Millisecond
 )
 
 type gasBucketConfig struct {
-	levels  []float64
-	baseIdx int
+	adjustment float64
 }
 
 type gasBucketState struct {
 	cachedEstimate uint64
 	hasEstimate    bool
-	levelIdx       int
 }
 
 type gasEstimateState struct {
@@ -63,21 +70,18 @@ func (s *gasEstimateState) configForBucket(bucket string) gasBucketConfig {
 }
 
 func (s *gasEstimateState) getOrInitBucketState(bucket string) gasBucketState {
-	cfg := s.configForBucket(bucket)
 	state, ok := s.bucketState[bucket]
 	if !ok {
-		state = gasBucketState{levelIdx: cfg.baseIdx}
+		state = gasBucketState{}
 		s.bucketState[bucket] = state
 	}
 	return state
 }
 
-func (s *gasEstimateState) currentGasAdjustment(bucket string) float64 {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	state := s.getOrInitBucketState(bucket)
-	cfg := s.configForBucket(bucket)
-	return cfg.levels[state.levelIdx]
+func (s *gasEstimateState) gasAdjustment(bucket string) float64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.configForBucket(bucket).adjustment
 }
 
 func (s *gasEstimateState) getCachedEstimate(bucket string) (uint64, bool) {
@@ -96,44 +100,49 @@ func (s *gasEstimateState) setEstimate(bucket string, gas uint64) {
 	s.bucketState[bucket] = state
 }
 
-func (s *gasEstimateState) escalateGasLevel(bucket string) (bool, float64, float64) {
+// bumpEstimateForOutOfGas sets the cached limit to gasWanted * outOfGasBumpFactor
+// so the hot-path retry can proceed without re-simulating.
+func (s *gasEstimateState) bumpEstimateForOutOfGas(bucket string, gasWanted uint64) uint64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	state := s.getOrInitBucketState(bucket)
-	cfg := s.configForBucket(bucket)
-	from := cfg.levels[state.levelIdx]
-	if state.levelIdx >= len(cfg.levels)-1 {
-		return false, from, from
+	base := gasWanted
+	if base == 0 {
+		base = state.cachedEstimate
 	}
-	state.levelIdx++
-	state.hasEstimate = false
-	to := cfg.levels[state.levelIdx]
+	if base == 0 {
+		return 0
+	}
+	newEstimate := uint64(float64(base) * outOfGasBumpFactor)
+	if newEstimate <= base {
+		newEstimate = base + 1
+	}
+	state.cachedEstimate = newEstimate
+	state.hasEstimate = true
 	s.bucketState[bucket] = state
-	return true, from, to
+	return newEstimate
 }
 
-func (s *gasEstimateState) setBucketToMaxLevel(bucket string) (float64, float64) {
+// raiseEstimateIfHigher updates the cache only when estimate is strictly greater
+// than the current cached value (or when no cache exists yet).
+func (s *gasEstimateState) raiseEstimateIfHigher(bucket string, estimate uint64) (updated bool, previous uint64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	state := s.getOrInitBucketState(bucket)
-	cfg := s.configForBucket(bucket)
-	from := cfg.levels[state.levelIdx]
-	maxIdx := len(cfg.levels) - 1
-	if state.levelIdx != maxIdx {
-		state.levelIdx = maxIdx
-		state.hasEstimate = false
-		s.bucketState[bucket] = state
+	previous = state.cachedEstimate
+	if state.hasEstimate && estimate <= state.cachedEstimate {
+		return false, previous
 	}
-	to := cfg.levels[state.levelIdx]
-	return from, to
+	state.cachedEstimate = estimate
+	state.hasEstimate = true
+	s.bucketState[bucket] = state
+	return true, previous
 }
 
-func (s *gasEstimateState) resetAllGasLevelsToBase() {
+func (s *gasEstimateState) clearAllEstimates() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for bucket, state := range s.bucketState {
-		cfg := s.configForBucket(bucket)
-		state.levelIdx = cfg.baseIdx
 		state.hasEstimate = false
 		state.cachedEstimate = 0
 		s.bucketState[bucket] = state
@@ -144,11 +153,93 @@ func newFactory(clientCtx client.Context) tx.Factory {
 	return tx.Factory{}.
 		WithChainID(clientCtx.ChainID).
 		WithKeybase(clientCtx.Keyring).
-		WithGasAdjustment(1.25).
+		WithGasAdjustment(defaultGasAdjustment).
 		WithGas(defaultGas).
 		WithSignMode(signing.SignMode_SIGN_MODE_DIRECT).
 		WithAccountRetriever(clientCtx.AccountRetriever).
 		WithTxConfig(clientCtx.TxConfig)
+}
+
+type txWaitDebugInfo struct {
+	TxHash           string
+	QueryMetaId      uint64
+	QueryId          string
+	QueryType        string
+	QueryData        string
+	ReportValue      string
+	MarketPair       string
+	Reporter         string
+	ChainID          string
+	Bucket           string
+	BroadcastHeight  int64
+	TimeoutHeight    uint64
+	TimeoutTimestamp time.Time
+	GasEstimate      uint64
+}
+
+func (d txWaitDebugInfo) logFields() []interface{} {
+	fields := []interface{}{
+		"txHash", d.TxHash,
+		"queryMetaId", d.QueryMetaId,
+		"queryId", d.QueryId,
+		"queryType", d.QueryType,
+		"queryData", d.QueryData,
+		"reportValue", d.ReportValue,
+		"reporter", d.Reporter,
+		"chainId", d.ChainID,
+		"bucket", d.Bucket,
+		"broadcastHeight", d.BroadcastHeight,
+		"timeoutHeight", d.TimeoutHeight,
+		"timeoutTimestamp", d.TimeoutTimestamp.UTC().Format(time.RFC3339Nano),
+		"gasEstimate", d.GasEstimate,
+	}
+	if d.MarketPair != "" {
+		fields = append(fields, "marketPair", d.MarketPair)
+	}
+	return fields
+}
+
+func (c *Client) buildTxWaitDebugInfo(
+	queryMetaId uint64,
+	bucket string,
+	broadcastHeight int64,
+	timeoutHeight uint64,
+	timeoutTimestamp time.Time,
+	gasEstimate uint64,
+	txHash string,
+	msg sdk.Msg,
+) txWaitDebugInfo {
+	info := txWaitDebugInfo{
+		TxHash:           txHash,
+		QueryMetaId:      queryMetaId,
+		Bucket:           bucket,
+		ChainID:          c.chainID(),
+		Reporter:         c.accAddr.String(),
+		BroadcastHeight:  broadcastHeight,
+		TimeoutHeight:    timeoutHeight,
+		TimeoutTimestamp: timeoutTimestamp,
+		GasEstimate:      gasEstimate,
+	}
+	submit, ok := msg.(*oracletypes.MsgSubmitValue)
+	if !ok {
+		return info
+	}
+	info.QueryData = hex.EncodeToString(submit.QueryData)
+	info.ReportValue = submit.Value
+	info.QueryId = hex.EncodeToString(utils.QueryIDFromData(submit.QueryData))
+	info.QueryType = c.GetQueryType(submit.QueryData)
+	info.MarketPair = c.marketPairForQueryData(submit.QueryData)
+	return info
+}
+
+func (c *Client) marketPairForQueryData(queryData []byte) string {
+	queryDataHex := hex.EncodeToString(queryData)
+	for _, marketParam := range c.MarketParams {
+		if marketParam.QueryData == queryDataHex {
+			return marketParam.Pair
+		}
+	}
+	return ""
 }
 
 func handleBroadcastResult(resp *sdk.TxResponse, err error) error {
@@ -165,34 +256,105 @@ func handleBroadcastResult(resp *sdk.TxResponse, err error) error {
 	return nil
 }
 
-func (c *Client) WaitForTx(ctx context.Context, hash string) (*cmttypes.ResultTx, error) {
-	waiting := true
+func (c *Client) WaitForTx(ctx context.Context, hash string, debug *txWaitDebugInfo) (*cmttypes.ResultTx, error) {
 	bz, err := hex.DecodeString(hash)
 	if err != nil {
 		return nil, fmt.Errorf("unable to decode tx hash '%s'; err: %w", hash, err)
 	}
 
 	waitedBlockCount := 0
-	for waiting {
+	for {
 		resp, err := c.txByHash(ctx, bz)
 		if err != nil {
 			if strings.Contains(err.Error(), "not found") {
-				if waitedBlockCount == 2 {
-					return nil, fmt.Errorf("waited for next block and transaction is still not found")
+				if waitedBlockCount >= 2 {
+					latestHeight, heightErr := c.LatestBlockHeight(ctx)
+					// Inclusion often lands exactly at timeoutHeight. Status can
+					// report that tip before /tx can serve the hash; retry once.
+					if heightErr == nil && debug != nil && uint64(latestHeight) == debug.TimeoutHeight {
+						select {
+						case <-ctx.Done():
+							return nil, fmt.Errorf("waiting to re-query tx at timeout height: %w", ctx.Err())
+						case <-time.After(txIndexRetryDelay):
+						}
+						if retryResp, retryErr := c.txByHash(ctx, bz); retryErr == nil {
+							return retryResp, nil
+						} else if !strings.Contains(retryErr.Error(), "not found") {
+							c.logger.Error(
+								"Error fetching transaction by hash",
+								append([]interface{}{"txHash", hash, "error", retryErr}, debug.logFields()...)...,
+							)
+							return nil, fmt.Errorf("fetching tx '%s'; err: %w", hash, retryErr)
+						}
+					}
+
+					fields := []interface{}{
+						"txHash", hash,
+						"waitedBlocks", waitedBlockCount,
+					}
+					if heightErr == nil {
+						fields = append(fields, "latestBlockHeight", latestHeight)
+					}
+					if debug != nil {
+						fields = append(fields, debug.logFields()...)
+					}
+					// Full query/report dump is reserved for this terminal miss:
+					// waited 2+ blocks and, at timeoutHeight, retried /tx once.
+					c.logger.Error("Transaction not found on chain after waiting for blocks", fields...)
+					if debug != nil {
+						if heightErr == nil {
+							return nil, fmt.Errorf(
+								"tx %s not found after waiting %d blocks (queryId=%s queryMetaId=%d queryType=%s broadcastHeight=%d latestBlockHeight=%d timeoutHeight=%d)",
+								hash, waitedBlockCount, debug.QueryId, debug.QueryMetaId, debug.QueryType,
+								debug.BroadcastHeight, latestHeight, debug.TimeoutHeight,
+							)
+						}
+						return nil, fmt.Errorf(
+							"tx %s not found after waiting %d blocks (queryId=%s queryMetaId=%d queryType=%s broadcastHeight=%d timeoutHeight=%d)",
+							hash, waitedBlockCount, debug.QueryId, debug.QueryMetaId, debug.QueryType,
+							debug.BroadcastHeight, debug.TimeoutHeight,
+						)
+					}
+					if heightErr == nil {
+						return nil, fmt.Errorf("tx %s not found after waiting %d blocks (latestBlockHeight=%d)", hash, waitedBlockCount, latestHeight)
+					}
+					return nil, fmt.Errorf("tx %s not found after waiting %d blocks", hash, waitedBlockCount)
 				}
-				err := c.WaitForNextBlock(ctx)
-				if err != nil {
+
+				// Skip warn on the first lookup: broadcast only means mempool
+				// acceptance, so "not found" before any block wait is expected.
+				// Keep this short; dump query/report details only if the tx is
+				// still missing after every wait and the timeout-height retry.
+				if waitedBlockCount >= 1 {
+					c.logger.Warn(
+						"Transaction not found on chain, waiting for next block",
+						"txHash", hash,
+						"waitedBlocks", waitedBlockCount,
+					)
+				}
+
+				if err := c.WaitForNextBlock(ctx); err != nil {
+					if debug != nil {
+						c.logger.Error(
+							"Failed while waiting for next block after tx not found",
+							append([]interface{}{"txHash", hash, "error", err}, debug.logFields()...)...,
+						)
+					}
 					return nil, fmt.Errorf("waiting for next block: err: %w", err)
 				}
 				waitedBlockCount++
 				continue
 			}
+			if debug != nil {
+				c.logger.Error(
+					"Error fetching transaction by hash",
+					append([]interface{}{"txHash", hash, "error", err}, debug.logFields()...)...,
+				)
+			}
 			return nil, fmt.Errorf("fetching tx '%s'; err: %w", hash, err)
 		}
-		// Tx found
 		return resp, nil
 	}
-	return nil, fmt.Errorf("fetching tx '%s'; err: %w", hash, err)
 }
 
 func (c *Client) WaitForNextBlock(ctx context.Context) error {
@@ -277,7 +439,7 @@ func (c *Client) EstimateGas(ctx context.Context, clientCtx client.Context, txf 
 	if gasEstimate, ok := c.gasEstimator.getCachedEstimate(bucket); ok {
 		return gasEstimate, nil
 	}
-	adjustment := c.gasEstimator.currentGasAdjustment(bucket)
+	adjustment := c.gasEstimator.gasAdjustment(bucket)
 	txf = txf.WithGasAdjustment(adjustment)
 	_, gasEstimate, err := tx.CalculateGas(clientCtx, txf, msg...)
 	if err != nil {
@@ -288,7 +450,43 @@ func (c *Client) EstimateGas(ctx context.Context, clientCtx client.Context, txf 
 }
 
 func (c *Client) resetAllGasLevelsToBase() {
-	c.gasEstimator.resetAllGasLevelsToBase()
+	c.gasEstimator.clearAllEstimates()
+}
+
+// refreshGasEstimateAsync re-simulates gas off the hot path after an out-of-gas
+// retry. The cache is only raised when the new estimate is higher than what we
+// already have (including the immediate 1.5x OOG bump).
+func (c *Client) refreshGasEstimateAsync(bucket string, msgs []sdk.Msg) {
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), asyncGasRefreshTimeout)
+		defer cancel()
+
+		c.grpcMu.RLock()
+		clientCtx := c.currentCosmosContext().WithCmdContext(ctx)
+		txf := newFactory(clientCtx).WithGasAdjustment(c.gasEstimator.gasAdjustment(bucket))
+		var err error
+		txf, err = txf.Prepare(clientCtx)
+		if err != nil {
+			c.grpcMu.RUnlock()
+			c.logger.Warn("Async gas refresh prepare failed", "bucket", bucket, "error", err)
+			return
+		}
+		_, gasEstimate, err := tx.CalculateGas(clientCtx, txf, msgs...)
+		c.grpcMu.RUnlock()
+		if err != nil {
+			c.logger.Warn("Async gas refresh simulation failed", "bucket", bucket, "error", err)
+			return
+		}
+
+		updated, previous := c.gasEstimator.raiseEstimateIfHigher(bucket, gasEstimate)
+		c.logger.Info(
+			"Async gas refresh completed",
+			"bucket", bucket,
+			"simulated", gasEstimate,
+			"previous", previous,
+			"updated", updated,
+		)
+	}()
 }
 
 func (c *Client) sendTx(ctx context.Context, queryMetaId uint64, isBridge bool, msg ...sdk.Msg) (*cmttypes.ResultTx, error) {
@@ -318,8 +516,16 @@ func (c *Client) sendTx(ctx context.Context, queryMetaId uint64, isBridge bool, 
 		if attempt > 1 {
 			c.logger.Info("Retrying tx after out-of-gas", "attempt", attempt, "maxAttempts", maxAttempts, "bucket", bucket)
 		}
-		txnResponse, txHash, err := c.sendTxOnce(ctx, bucket, msg...)
+		txnResponse, txHash, err := c.sendTxOnce(ctx, queryMetaId, bucket, msg...)
 		if err != nil {
+			c.logger.Error(
+				"Transaction send failed",
+				"attempt", attempt,
+				"maxAttempts", maxAttempts,
+				"queryMetaId", queryMetaId,
+				"bucket", bucket,
+				"error", err,
+			)
 			return nil, err
 		}
 		lastResp = txnResponse
@@ -337,28 +543,26 @@ func (c *Client) sendTx(ctx context.Context, queryMetaId uint64, isBridge bool, 
 			return txnResponse, nil
 		}
 
-		changed, from, to := c.gasEstimator.escalateGasLevel(bucket)
+		newEstimate := c.gasEstimator.bumpEstimateForOutOfGas(bucket, uint64(txnResponse.TxResult.GasWanted))
 		c.logger.Info(
 			"Detected out-of-gas tx response",
 			"code", txnResponse.TxResult.Code,
 			"bucket", bucket,
 			"attempt", attempt,
-			"escalated", changed,
-			"from", from,
-			"to", to,
+			"gasAdjustment", c.gasEstimator.gasAdjustment(bucket),
+			"gasWanted", txnResponse.TxResult.GasWanted,
+			"gasUsed", txnResponse.TxResult.GasUsed,
+			"newGasEstimate", newEstimate,
+			"bumpFactor", outOfGasBumpFactor,
 		)
-		if !changed {
-			return txnResponse, nil
-		}
+		c.refreshGasEstimateAsync(bucket, msg)
 	}
 
 	if spotPriceTx {
-		from, to := c.gasEstimator.setBucketToMaxLevel(bucket)
 		c.logger.Info(
-			"Skipping third spot price send attempt after two failures",
+			"Skipping further spot price send attempts after out-of-gas retries",
 			"bucket", bucket,
-			"from", from,
-			"to", to,
+			"maxAttempts", maxAttempts,
 		)
 	}
 	return lastResp, nil
@@ -371,7 +575,7 @@ func (c *Client) maxAttemptsForTx(msg sdk.Msg) int {
 	return defaultMaxTxAttempts
 }
 
-func (c *Client) sendTxOnce(ctx context.Context, bucket string, msg ...sdk.Msg) (*cmttypes.ResultTx, string, error) {
+func (c *Client) sendTxOnce(ctx context.Context, queryMetaId uint64, bucket string, msg ...sdk.Msg) (*cmttypes.ResultTx, string, error) {
 	var block *cmtservice.GetLatestBlockResponse
 	if err := c.withGRPCFallback(ctx, "latest block lookup", func() error {
 		var err error
@@ -384,21 +588,26 @@ func (c *Client) sendTxOnce(ctx context.Context, bucket string, msg ...sdk.Msg) 
 	clientCtx := c.currentCosmosContext()
 	txf := newFactory(clientCtx)
 
+	broadcastHeight := block.SdkBlock.Header.Height
+	timeoutHeight := uint64(broadcastHeight) + c.txTimeoutHeightOffset
+	timeoutTimestamp := c.GetUniqueUnorderedTimeout()
+
 	// Configure for unordered transactions (Cosmos SDK 0.53.4+)
 	// Set sequence to 0, enable unordered mode, and set unique timeout timestamp
 	// https://docs.cosmos.network/v0.53/build/architecture/adr-070-unordered-account
 	txf = txf.WithSequence(0).
 		WithGasPrices(c.minGasFee).
-		WithTimeoutHeight(uint64(block.SdkBlock.Header.Height + 2)).
+		WithTimeoutHeight(timeoutHeight).
 		WithUnordered(true).
-		WithTimeoutTimestamp(c.GetUniqueUnorderedTimeout())
+		WithTimeoutTimestamp(timeoutTimestamp)
 	var err error
 	txf, err = txf.Prepare(clientCtx)
 	if err != nil {
 		c.grpcMu.RUnlock()
 		return nil, "", fmt.Errorf("error preparing transaction factory: %w", err)
 	}
-	gasEstimate, err := c.EstimateGas(ctx, clientCtx, txf, bucket, msg...)
+	var gasEstimate uint64
+	gasEstimate, err = c.EstimateGas(ctx, clientCtx, txf, bucket, msg...)
 	if err == nil {
 		txf = txf.WithGas(gasEstimate)
 	}
@@ -419,10 +628,21 @@ func (c *Client) sendTxOnce(ctx context.Context, bucket string, msg ...sdk.Msg) 
 	}
 	res, err := c.broadcastTxWithFallback(ctx, txBytes)
 	if err := handleBroadcastResult(res, err); err != nil {
+		debug := c.buildTxWaitDebugInfo(
+			queryMetaId, bucket, broadcastHeight, timeoutHeight, timeoutTimestamp, gasEstimate, "", msg[0],
+		)
+		c.logger.Error(
+			"Transaction broadcast rejected",
+			append([]interface{}{"error", err}, debug.logFields()...)...,
+		)
 		return nil, "", fmt.Errorf("error broadcasting transaction result: %w", err)
 	}
 
-	txnResponse, err := c.WaitForTx(ctx, res.TxHash)
+	debugInfo := c.buildTxWaitDebugInfo(
+		queryMetaId, bucket, broadcastHeight, timeoutHeight, timeoutTimestamp, gasEstimate, res.TxHash, msg[0],
+	)
+
+	txnResponse, err := c.WaitForTx(ctx, res.TxHash, &debugInfo)
 	if err != nil {
 		return nil, "", fmt.Errorf("error waiting for transaction: %w", err)
 	}

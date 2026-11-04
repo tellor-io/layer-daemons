@@ -21,7 +21,7 @@ func TestSFRXUSDHandler_Success(t *testing.T) {
 	rpcServer := createTestRPCServer(t, pricePerShare)
 	defer rpcServer.Close()
 
-	contractReader, err := contractreader.NewReader([]string{rpcServer.URL}, 10)
+	contractReader, err := contractreader.NewReader([]string{rpcServer.URL}, 10000, 1)
 	require.NoError(t, err)
 	defer contractReader.Close()
 
@@ -43,6 +43,7 @@ func TestSFRXUSDHandler_Success(t *testing.T) {
 		[]string{"frax", "usd"},
 		5000,
 		nil,
+		1,
 	)
 	require.NoError(t, err)
 
@@ -54,6 +55,7 @@ func TestSFRXUSDHandler_Success(t *testing.T) {
 		[]string{"data", "usd_price"},
 		5000,
 		nil,
+		1,
 	)
 	require.NoError(t, err)
 
@@ -65,6 +67,7 @@ func TestSFRXUSDHandler_Success(t *testing.T) {
 		[]string{"quotes", "USD", "price"},
 		5000,
 		nil,
+		1,
 	)
 	require.NoError(t, err)
 
@@ -105,7 +108,7 @@ func TestSFRXUSDHandler_ZeroPricePerShare(t *testing.T) {
 	rpcServer := createTestRPCServer(t, pricePerShare)
 	defer rpcServer.Close()
 
-	contractReader, err := contractreader.NewReader([]string{rpcServer.URL}, 10)
+	contractReader, err := contractreader.NewReader([]string{rpcServer.URL}, 10000, 1)
 	require.NoError(t, err)
 	defer contractReader.Close()
 
@@ -124,7 +127,7 @@ func TestSFRXUSDHandler_InsufficientSources(t *testing.T) {
 	rpcServer := createTestRPCServer(t, pricePerShare)
 	defer rpcServer.Close()
 
-	contractReader, err := contractreader.NewReader([]string{rpcServer.URL}, 10)
+	contractReader, err := contractreader.NewReader([]string{rpcServer.URL}, 10000, 1)
 	require.NoError(t, err)
 	defer contractReader.Close()
 
@@ -140,6 +143,7 @@ func TestSFRXUSDHandler_InsufficientSources(t *testing.T) {
 		[]string{"frax", "usd"},
 		5000,
 		nil,
+		1,
 	)
 	require.NoError(t, err)
 

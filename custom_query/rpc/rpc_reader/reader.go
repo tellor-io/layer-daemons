@@ -3,9 +3,11 @@ package rpc_reader
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -32,14 +34,22 @@ type httpClient struct {
 	method  string
 }
 
-func NewReader(url, method, query string, headers map[string]string, responsePath []string, timeout int, params map[string]string) (*Reader, error) {
+func NewReader(url, method, query string, headers map[string]string, responsePath []string, timeoutMs int, params map[string]string, maxRetries int) (*Reader, error) {
 	if url == "" {
 		return nil, fmt.Errorf("no RPC endpoint provided")
 	}
 
+	if timeoutMs <= 0 {
+		timeoutMs = 1000
+	}
+	if maxRetries <= 0 {
+		maxRetries = 1
+	}
+
+	attemptTimeout := time.Duration(timeoutMs) * time.Millisecond
 	client := &httpClient{
 		client: &http.Client{
-			Timeout: time.Duration(timeout) * time.Second,
+			Timeout: attemptTimeout,
 		},
 		baseURL: url,
 		method:  method,
@@ -47,9 +57,9 @@ func NewReader(url, method, query string, headers map[string]string, responsePat
 
 	reader := &Reader{
 		client:       client,
-		timeout:      time.Duration(timeout) * time.Millisecond,
-		maxRetries:   3,
-		retryDelay:   100 * time.Millisecond,
+		timeout:      attemptTimeout,
+		maxRetries:   maxRetries,
+		retryDelay:   75 * time.Millisecond,
 		Headers:      headers,
 		ResponsePath: responsePath,
 		Query:        query,
@@ -103,6 +113,10 @@ func (r *Reader) fetchWithRetry(ctx context.Context) ([]byte, error) {
 
 		lastErr = err
 		log.Warnf("Request failed (attempt %d/%d): %v", retry+1, r.maxRetries+1, err)
+
+		if retry >= r.maxRetries || !isTransientRPCError(err) || !hasRetryBudget(ctx) {
+			break
+		}
 	}
 
 	metrics.RPCCallErrors.Inc()
@@ -144,6 +158,40 @@ func (r *Reader) attemptFetch(ctx context.Context, method string) ([]byte, error
 	}
 
 	return body, nil
+}
+
+func isTransientRPCError(err error) bool {
+	if err == nil {
+		return false
+	}
+	// Do not retry parent/per-attempt deadline failures: another attempt rarely
+	// finishes inside the remaining collection window and doubles hung-source cost.
+	if errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return false
+	}
+	msg := err.Error()
+	if strings.Contains(msg, "context deadline exceeded") ||
+		strings.Contains(msg, "Client.Timeout exceeded") ||
+		strings.Contains(msg, "timeout") {
+		return false
+	}
+	return strings.Contains(msg, "connection reset") ||
+		strings.Contains(msg, "429") ||
+		strings.Contains(msg, "502") ||
+		strings.Contains(msg, "503") ||
+		strings.Contains(msg, "504")
+}
+
+func hasRetryBudget(ctx context.Context) bool {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return true
+	}
+	return time.Until(deadline) >= 900*time.Millisecond
 }
 
 func (r *Reader) ExtractValueFromJSON(data []byte, path []string) (any, error) {

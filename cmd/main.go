@@ -168,6 +168,9 @@ func init() {
 	rootCmd.Flags().Bool(daemonflags.FlagWithdrawToWallet, false, "Withdraw reporting rewards to the wallet balance instead of staking them")
 	rootCmd.Flags().String(daemonflags.FlagWithdrawToWalletPowerThreshold, daemonflags.DefaultWithdrawToWalletPowerThreshold, "Withdraw rewards to the wallet when projected reporter power exceeds this share of total bonded tokens")
 	rootCmd.Flags().Duration("refresh-gas-estimates-interval", 12*time.Hour, "Interval for resetting cached gas estimates and gas-adjustment levels (<=0 disables)")
+	rootCmd.Flags().Duration("tx-broadcast-timeout", 15*time.Second, "Max time to sign, broadcast, and wait for block inclusion per transaction")
+	rootCmd.Flags().Duration("unordered-tx-timeout", 30*time.Second, "Wall-clock TTL for unordered transaction timeout timestamps")
+	rootCmd.Flags().Uint64("tx-timeout-height-offset", 2, "Blocks after broadcast height before an unordered transaction expires on-chain")
 	// Remote signer: when set, tx signing is delegated to the remote signer service instead of the local keyring
 	rootCmd.Flags().String("remote-signer-addr", "", "gRPC address of the remote signer service (e.g. localhost:9191). When set, tx signing uses the remote signer instead of the local keyring.")
 	rootCmd.Flags().String("remote-signer-ca-cert", "", "Path to the CA certificate for verifying the remote signer's TLS certificate.")

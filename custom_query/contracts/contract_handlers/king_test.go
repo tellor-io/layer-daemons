@@ -18,7 +18,7 @@ func TestKingContractCall(t *testing.T) {
 		"https://rpc.ankr.com/eth",
 	}
 
-	r, err := reader.NewReader(rpcURLs, 30)
+	r, err := reader.NewReader(rpcURLs, 30000, 3)
 	if err != nil {
 		t.Fatalf("Failed to create reader: %v", err)
 	}

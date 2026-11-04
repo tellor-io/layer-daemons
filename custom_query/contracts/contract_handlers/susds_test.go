@@ -70,7 +70,7 @@ func TestSUSDSHandler_FetchValue(t *testing.T) {
 			defer server.Close()
 
 			// Create reader with test server URL
-			contractReader, err := reader.NewReader([]string{server.URL}, 10)
+			contractReader, err := reader.NewReader([]string{server.URL}, 10000, 1)
 			require.NoError(t, err)
 			defer contractReader.Close()
 
@@ -143,7 +143,7 @@ func TestSUSDSHandler_ContractRead_Integration(t *testing.T) {
 		"https://rpc.ankr.com/eth",
 	}
 
-	contractReader, err := reader.NewReader(rpcURLs, 30)
+	contractReader, err := reader.NewReader(rpcURLs, 30000, 3)
 	if err != nil {
 		t.Skipf("Failed to create reader: %v", err)
 	}

@@ -65,16 +65,40 @@ func (etp *ExchangeToPrice) UpdatePrices(updates []*servertypes.ExchangePrice) {
 func (etp *ExchangeToPrice) GetValidPrices(
 	cutoffTime time.Time,
 ) []uint64 {
-	validExchangePricesForMarket := make([]uint64, 0, len(etp.exchangeToPriceTimestamp))
+	prices, _ := etp.getValidPricesAndLatestUpdate(cutoffTime, true)
+	return prices
+}
+
+// GetValidPricesAndLatestUpdate returns valid prices for the market and the most recent
+// LastUpdateTime among those valid prices. Unlike GetValidPrices, this does not emit
+// per-exchange telemetry (intended for logging / diagnostics).
+func (etp *ExchangeToPrice) GetValidPricesAndLatestUpdate(
+	cutoffTime time.Time,
+) (prices []uint64, latestUpdate time.Time) {
+	return etp.getValidPricesAndLatestUpdate(cutoffTime, false)
+}
+
+func (etp *ExchangeToPrice) getValidPricesAndLatestUpdate(
+	cutoffTime time.Time,
+	emitTelemetry bool,
+) (prices []uint64, latestUpdate time.Time) {
+	prices = make([]uint64, 0, len(etp.exchangeToPriceTimestamp))
 	for exchangeId, priceTimestamp := range etp.exchangeToPriceTimestamp {
 		validity := metrics.Valid
 
 		// PriceTimestamp returns price if the last update time is valid.
 		if price, ok := priceTimestamp.GetValidPrice(cutoffTime); ok {
-			validExchangePricesForMarket = append(validExchangePricesForMarket, price)
+			prices = append(prices, price)
+			if priceTimestamp.LastUpdateTime.After(latestUpdate) {
+				latestUpdate = priceTimestamp.LastUpdateTime
+			}
 		} else {
 			// Price is invalid.
 			validity = metrics.PriceIsInvalid
+		}
+
+		if !emitTelemetry {
+			continue
 		}
 
 		// Measure count of valid and invalid prices fetched from the in-memory map.
@@ -92,5 +116,5 @@ func (etp *ExchangeToPrice) GetValidPrices(
 			},
 		)
 	}
-	return validExchangePricesForMarket
+	return prices, latestUpdate
 }

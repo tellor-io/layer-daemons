@@ -62,11 +62,35 @@ func (s *Server) UpdateMarketPrices(
 	}
 
 	s.marketToExchange.UpdatePrices(req.MarketPriceUpdates)
+	s.logPricefeedCacheAggregates(req.MarketPriceUpdates)
 
 	// Capture valid responses in metrics.
 	s.reportValidResponse(types.PricefeedDaemonServiceName)
 
 	return &daemontypes.UpdateMarketPricesResponse{}, nil
+}
+
+// logPricefeedCacheAggregates logs the median aggregate for each market after a cache update.
+func (s *Server) logPricefeedCacheAggregates(updates []*daemontypes.MarketPriceUpdate) {
+	if len(updates) == 0 {
+		return
+	}
+
+	marketIds := make([]uint32, 0, len(updates))
+	for _, update := range updates {
+		marketIds = append(marketIds, update.MarketId)
+	}
+
+	now := time.Now()
+	for _, snapshot := range s.marketToExchange.GetValidPriceAggregates(marketIds, now) {
+		s.logger.Info(
+			"pricefeed cache updated",
+			constants.MarketIdLogKey, snapshot.MarketId,
+			constants.PriceLogKey, snapshot.Price,
+			constants.TimestampLogKey, snapshot.LatestUpdate.UTC().Format(time.RFC3339Nano),
+			constants.NumSourcesLogKey, snapshot.NumSources,
+		)
+	}
 }
 
 // validateMarketPricesUpdatesMessage validates a `UpdateMarketPricesRequest`.

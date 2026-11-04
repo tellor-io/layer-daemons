@@ -828,8 +828,7 @@ var TestnetExchangeMarketConfig = map[types.ExchangeId]*types.MutableExchangeMar
 				AdjustByMarket: newMarketIdWithValue(MARKET_USDT_USD),
 			},
 			MARKET_USDT_USD: {
-				Ticker: "USDC-USDT",
-				Invert: true,
+				Ticker: "USDT-USD",
 			},
 			MARKET_XLM_USD: {
 				Ticker:         "XLM-USDT",

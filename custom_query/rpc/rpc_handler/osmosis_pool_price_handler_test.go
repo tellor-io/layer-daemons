@@ -53,7 +53,7 @@ func TestOsmosisPoolPriceHandlerWeightedPool(t *testing.T) {
 		"quote_token":     osmosisUSDC,
 		"target_decimals": "6",
 		"quote_decimals":  "6",
-	})
+	}, 1)
 	require.NoError(t, err)
 
 	var h OsmosisPoolPriceHandler
@@ -80,7 +80,7 @@ func TestOsmosisPoolPriceHandlerConcentratedPoolTargetAsToken1(t *testing.T) {
 	rdr, err := reader.NewReader(srv.URL, http.MethodGet, "", nil, []string{"pool"}, 5000, map[string]string{
 		"target_token": "target",
 		"quote_token":  "quote",
-	})
+	}, 1)
 	require.NoError(t, err)
 
 	var h OsmosisPoolPriceHandler
