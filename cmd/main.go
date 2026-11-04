@@ -165,6 +165,8 @@ func init() {
 	rootCmd.Flags().Uint32("auto-unbonding-frequency", 0, "Enable automatic unbonding every N days (0 = disabled, 1 - 21 days = valid)")
 	rootCmd.Flags().Uint32("auto-unbonding-amount", 0, "Amount of tokens in loya to unbond each unbonding transaction (0 = disabled)")
 	rootCmd.Flags().String("auto-unbonding-max-stake-percentage", "0.0", "Maximum percentage of stake to unbond each unbonding transaction (0 = disabled, 1.0 = 100%). If unbonding amount exceeds this percentage, we will skip the unbonding transaction until it exceeds this percentage again.")
+	rootCmd.Flags().Bool(daemonflags.FlagWithdrawToWallet, false, "Withdraw reporting rewards to the wallet balance instead of staking them")
+	rootCmd.Flags().String(daemonflags.FlagWithdrawToWalletPowerThreshold, daemonflags.DefaultWithdrawToWalletPowerThreshold, "Withdraw rewards to the wallet when projected reporter power exceeds this share of total bonded tokens")
 	rootCmd.Flags().Duration("refresh-gas-estimates-interval", 12*time.Hour, "Interval for resetting cached gas estimates and gas-adjustment levels (<=0 disables)")
 	rootCmd.Flags().Duration("tx-broadcast-timeout", 15*time.Second, "Max time to sign, broadcast, and wait for block inclusion per transaction")
 	rootCmd.Flags().Duration("unordered-tx-timeout", 30*time.Second, "Wall-clock TTL for unordered transaction timeout timestamps")
